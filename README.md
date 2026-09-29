@@ -1,6 +1,6 @@
 # Skillshaper
 
-Enhanced agent skill for **creating, improving, validating, and packaging** Claude / Cursor / agent skills with stricter quality and **mandatory dual output**.
+Enhanced agent skill for **creating, improving, validating, and packaging** agent skills with stricter quality and **mandatory dual output**.
 
 **Voice:** Standards enforcer — quality and packaging, not creative writing.
 
