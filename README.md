@@ -7,18 +7,18 @@ Enhanced agent skill for **creating, improving, validating, and packaging** Clau
 ## Install via skills.sh CLI
 
 ```bash
-npx skills add SPRIC76/sc2
+npx skills add SPRIC76/skillshaper
 ```
 
 **Badge snippet:**
 
 ```markdown
-[![skills.sh](https://skills.sh/b/SPRIC76/sc2)](https://skills.sh/SPRIC76/sc2)
+[![skills.sh](https://skills.sh/b/SPRIC76/skillshaper)](https://skills.sh/SPRIC76/skillshaper)
 ```
 
-## What SC2 adds
+## What skillshaper adds
 
-SC2 supplements Anthropic's skill-creator workflow with:
+Skillshaper supplements Anthropic's skill-creator workflow with:
 
 | Requirement | Detail |
 |-------------|--------|
@@ -30,24 +30,24 @@ SC2 supplements Anthropic's skill-creator workflow with:
 ## Install (Cursor)
 
 ```text
-~/.cursor/skills/sc2/
+~/.cursor/skills/skillshaper/
 # or
-.cursor/skills/sc2/
+.cursor/skills/skillshaper/
 ```
 
-Copy this entire folder. Pair with Cursor's built-in **create-skill** guidance for the full authoring workflow; SC2 is the stricter **packaging overlay**.
+Copy this entire folder. Pair with Cursor's built-in **create-skill** guidance for the full authoring workflow; skillshaper is the stricter **packaging overlay**.
 
 ## Install (Claude)
 
 ### claude.ai and Claude Desktop
 
-1. Package the folder: `python scripts/package_dual.py ./sc2 --version 1.1 --output ./dist`
-2. Upload `sc2.skill` in your skill settings, or drag it into Claude Desktop.
-3. Confirm SC2 appears in your skills.
+1. Package the folder: `python scripts/package_dual.py ./skillshaper --version 1.1 --output ./dist`
+2. Upload `skillshaper.skill` in your skill settings, or drag it into Claude Desktop.
+3. Confirm skillshaper appears in your skills.
 
 ### Claude Code
 
-Copy the folder to `~/.claude/skills/sc2/` (all projects) or `.claude/skills/sc2/` (one project).
+Copy the folder to `~/.claude/skills/skillshaper/` (all projects) or `.claude/skills/skillshaper/` (one project).
 
 ## Usage
 
@@ -91,9 +91,9 @@ Both are zip archives with `my-skill/SKILL.md` as the root entry. `evals/` and `
 
 ## Other IDEs and agents
 
-SC2 can be used anywhere an agent runtime supports folder-based skill instructions:
+Skillshaper can be used anywhere an agent runtime supports folder-based skill instructions:
 
-- Import/copy the `sc2/` folder as a skill package.
+- Import/copy the `skillshaper/` folder as a skill package.
 - Ensure the runtime can execute the scripts (Python 3.10+ recommended; standard library only).
 - If the IDE has no skill system, you can still run the validator and packager manually from a terminal.
 
