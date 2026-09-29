@@ -1,4 +1,4 @@
-# SC2 — Skill Creator 2
+# Skillshaper
 
 Enhanced agent skill for **creating, improving, validating, and packaging** Claude / Cursor / agent skills with stricter quality and **mandatory dual output**.
 
