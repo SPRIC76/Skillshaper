@@ -60,11 +60,13 @@ read 2026-09-30): metadata a mapping of text keys to text values, license and al
 compatibility 1-500 characters, each an ERROR line; the stricter rules some hosts apply on upload
 are named as theirs; a name that is a list or mapping is named so; a value a !! tag made is told to
 drop the tag; "Use before", "Use after" and "Use while" count as when-to-use cues; "honor", in American spelling.
+Updated: 2026-09-30 17:22 ET — v1.12: the specification's shapes for metadata, license, allowed-tools and an empty
+compatibility are WARNING lines, not errors: hosts accept the other forms in practice, and 9 of 442 real, working
+skills use one, so packaging goes on; each names its form and the specification's, and --strict counts it.
 
 Errors are what the Agent Skills specification's rules exclude, what some hosts reject on upload
 (angle brackets in the description, more than one SKILL.md), or what leaves the
-skill broken: frontmatter keys and limits (metadata a mapping of text keys to text values,
-license and allowed-tools text, compatibility 1 to 500 characters; and frontmatter that is not valid YAML,
+skill broken: frontmatter keys and limits (and frontmatter that is not valid YAML,
 read by PyYAML when it is installed; without it, the built-in reader reads this subset
 and refuses the rest by name with the way to write it, or pip install pyyaml -
 key: value values, the key of letters, digits, _ and - (or quoted without escapes), up to
@@ -93,7 +95,11 @@ references without a contents list, a UTF-8 BOM in SKILL.md or any other text fi
 the package ships (a .ps1 excepted: Windows PowerShell reads a UTF-8 script by its BOM),
 a text file outside references/, scripts/ and assets/ (LICENSE, README.md) that is not UTF-8,
 and paths from sandboxes that no longer exist (/mnt/skills, /home/claude), one
-person's user folder in any letter case, or tool names only one surface has.
+person's user folder in any letter case, or tool names only one surface has. The Agent Skills
+specification's shapes (agentskills.io/specification, read 2026-09-30) are warnings, since some hosts
+accept the other forms (--strict counts them): metadata that is not a mapping of text keys to text
+values, license or allowed-tools that is not text (allowed-tools is one space-separated string), and
+an empty compatibility.
 
 Usage:
     python validate_skill.py <skill-folder> [<skill-folder> ...] [--strict]
@@ -1036,35 +1042,41 @@ def _spec_shapes(fm):
     """The optional keys' shapes, by the Agent Skills specification (https://agentskills.io/specification, read
     2026-09-30): metadata is "a map from string keys to string values"; allowed-tools is "a space-separated
     string"; license names a license or a bundled license file; compatibility "Must be 1-500 characters if
-    provided" (over 500 is checked in check()). The page says none of these as "should", so each is an ERROR line."""
-    errors = []
+    provided" (over 500 is an ERROR in check(), as it has been since 1.1). Each shape here is a WARNING line,
+    not an error: hosts accept the other forms in practice (an allowed-tools YAML list, a number in metadata), and
+    working skills use them, so packaging goes on; --strict counts each, as it counts every warning."""
+    warnings = []
+
+    def say(subject, form, spec_form, advice=""):
+        warnings.append(f"{subject} is {form}: some hosts accept that, but {SPEC} gives {spec_form}, which some "
+                        f"hosts require{'; ' + advice if advice else ''}")
+
+    def kind(value):
+        return "text" if isinstance(value, str) else ("a YAML " + _kind(value)[2:]) if isinstance(
+            value, (list, dict)) else _kind(value)
+
     if "metadata" in fm:
         meta = fm["metadata"]
         if not isinstance(meta, dict):
-            kind = "text" if isinstance(meta, str) else _kind(meta)
-            errors.append(f"metadata is {kind}, not a mapping: {SPEC} takes key: value lines under it, each value "
-                          "text")
+            say("metadata", kind(meta), "a mapping of text keys to text values", "write key: value lines under it")
         else:
             for k, v in meta.items():
                 if not isinstance(k, str):
-                    errors.append(f"metadata key {_shown(k)} is {_kind(k)}, not text: {SPEC} takes text keys; "
-                                  "quote it")
+                    say(f"metadata key {_shown(k)}", kind(k), "text keys", "quote it")
                 elif not isinstance(v, str):
                     advice = ("give it a value in quotes, or drop it" if v is None
                               else "write it as one line of text" if isinstance(v, (list, dict, bytes, set))
                               else "quote it")
-                    errors.append(f"metadata value {k} is {_kind(v)} ({_shown(v)}), not text: {SPEC} takes text "
-                                  f"values; {advice}")
-    for key, shape in (("license", "a license name or a bundled license file's name"),
-                       ("allowed-tools", "one space-separated string, such as Bash(git:*) Read")):
+                    say(f"metadata value {k}", f"{kind(v)} ({_shown(v)})", "text values", advice)
+    for key, spec_form, advice in (("license", "text (a license name or a bundled license file's name)", ""),
+                                   ("allowed-tools", "a space-separated string", "write it as Bash(git:*) Read")):
         if key in fm and not isinstance(fm[key], str):
-            errors.append(f"{key} is {_kind(fm[key])}, not text: {SPEC} takes {shape}")
+            say(key, kind(fm[key]), spec_form, advice)
     if "compatibility" in fm:
         comp = fm["compatibility"]
         if comp is None or (isinstance(comp, str) and not comp.strip()):
-            errors.append(f"compatibility is empty: {SPEC} takes 1 to 500 characters; write the requirement, or drop "
-                          "the key")
-    return errors
+            say("compatibility", "empty", "1 to 500 characters", "write the requirement, or drop the key")
+    return warnings
 
 
 def check(skill_dir, out=None):
@@ -1142,7 +1154,7 @@ def check(skill_dir, out=None):
         long_comp = True
     if long_comp:
         errors.append("compatibility is over 500 characters")
-    errors += _spec_shapes(fm)
+    warnings += _spec_shapes(fm)  # the specification's shapes: warnings, since hosts accept the other forms
 
     body_lines = body.count("\n") + 1
     if body_lines > 500:

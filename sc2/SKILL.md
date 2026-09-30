@@ -46,7 +46,7 @@ python scripts/validate_skill.py <skill-folder> [--strict]
 
   Anything else (a key such as `x.y:`, `allowed tools:` or `~:`, a tab, an anchor, alias or tag, a collection inside a list or a flow collection, a list of mappings, a list item over more than one line, a mapping nested deeper, a flow key without a value such as `{a}`, a quote continued at column 0 (on a line not indented past its key), a block header on the line below its key, a complex `? ` key, a date with a time, a comment inside `[ ]`, frontmatter over 100,000 characters) is refused by name with the way to write it, or read after `pip install pyyaml`. For any input the built-in reader returns exactly what PyYAML 6 returns, or refuses; it never guesses, and neither script stops on a traceback (a number too long to print, past Python's 4,300 digits, is shown by its size).
 - frontmatter keys other than `name`, `description`, `license`, `allowed-tools`, `metadata`, `compatibility`
-- by the Agent Skills specification's rules (agentskills.io/specification): `metadata` that is not a mapping of text keys to text values (quote a version: `version: "1.4"`); `license` or `allowed-tools` that is not text (`allowed-tools` is one space-separated string, such as `Bash(git:*) Read`); `compatibility` empty or over 500 characters
+- `compatibility` over 500 characters, the Agent Skills specification's limit
 - `name` missing or null, not text, not kebab-case, over 64 characters, or different from its folder
 - a key YAML reads as a boolean, number or null (an unquoted `on:`, `yes:` or `1:`, and `~:` where PyYAML reads it), named as YAML types it
 - `description` missing or null; not text (an unquoted `1.4`, `yes` or `2026-09-30`, which YAML reads as a number, a boolean or a date: quote it; a list or mapping, named so; a value a `!!` tag made, such as bytes: drop the tag); over 1024 characters; or containing angle brackets, which some hosts reject on upload
@@ -62,6 +62,7 @@ python scripts/validate_skill.py <skill-folder> [--strict]
 **Warnings:**
 
 - no "when to use" cue in the description ("Use when", "Use before", "Use after", "Use while", "Use for", "Use to", "Triggers on" and the like)
+- by the Agent Skills specification's rules (agentskills.io/specification): `metadata` that is not a mapping of text keys to text values (quote a version: `version: "1.4"`); `license` or `allowed-tools` that is not text (`allowed-tools` is one space-separated string, such as `Bash(git:*) Read`); an empty `compatibility`. Each warning names the form found and the specification's; they are warnings, not errors, because some hosts accept the other forms; `--strict` treats each as an error, as it does every warning
 - trigger phrases kept in the body
 - files nothing points to (orphans)
 - references over 300 lines without a contents list

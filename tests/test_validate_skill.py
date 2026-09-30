@@ -22,6 +22,8 @@ commands, links, "the skill <Name>", Install and Uninstall sections only); the A
 metadata, license, allowed-tools and compatibility; the docs say the specification, not "the upload rules"; a value a !!
 tag made, a list name, the Python floor, one install section; "Use before", "Use after" and "Use while" as when-to-use
 cues; each failed before its fix. The parity tables allow only the specification's shape errors on their values.
+Updated: 2026-09-30 17:22 ET — EleventhReview: the specification's shapes are warnings that name both forms, with --strict counting
+them, and the docs say so; the parity tables again allow no error on their values; each failed on 265fb3f.
 
 Run from the repository root:
     python -B -m unittest discover -s tests -v
@@ -755,18 +757,14 @@ class EighthReview(unittest.TestCase):
                         continue
                     fm, _ = validate_skill._parse_frontmatter(text)
                     errors, warnings = validate_skill.check(skill)
-                    # The shapes ride on metadata and allowed-tools; the reader's verdict is the value, and the only
-                    # errors left are the Agent Skills specification's shape rules on that value (EleventhReview).
-                    spec = validate_skill._spec_shapes(fm)
                     if verdict[0] == "text":
                         self.assertEqual(fm[verdict[1]], verdict[2])
-                        self.assertEqual(errors, spec, errors)
+                        self.assertEqual(errors, [], errors)
                         if verdict[1] == "description" and validate_skill.WHEN_CUE.search(verdict[2]):
                             self.assertFalse([w for w in warnings if "when to use" in w], warnings)
                     elif verdict[0] == "none":
                         self.assertIsNone(fm[verdict[1]], fm)
-                        self.assertEqual(errors, (["frontmatter has no description"] if verdict[1] == "description" else [])
-                                         + spec, errors)
+                        self.assertEqual(errors, ["frontmatter has no description"] if verdict[1] == "description" else [], errors)
                     else:
                         self.assertNotIsInstance(fm["description"], str)
                         self.assertEqual(len(errors), 1, errors)
@@ -1601,30 +1599,47 @@ class EleventhReview(unittest.TestCase):
     # The Agent Skills specification (agentskills.io/specification, read 2026-09-30): metadata is "a map from string
     # keys to string values"; allowed-tools is "a space-separated string"; license names a license or a bundled
     # license file; compatibility "Must be 1-500 characters if provided".
+    # Each a WARNING (the lead, 2026-09-30: hosts accept these forms in practice, and 9 of 442 real, working skills
+    # use one; an error would stop packaging them, a regression against 1.3). Each names its form and the
+    # specification's, and --strict counts it as it counts every warning.
     SPEC = {
-        "metadata-number": ("metadata:\n  version: 1.4", "metadata value version is a number (1.4), not text"),
-        "metadata-list-value": ("metadata:\n  tags: [a, b]", "metadata value tags is a list"),
-        "metadata-mapping-value": ("metadata:\n  a: {b: c}", "metadata value a is a mapping"),
-        "metadata-number-key": ("metadata:\n  1: one", "metadata key 1 is a number, not text"),
-        "metadata-list": ("metadata: [a, b]", "metadata is a list, not a mapping"),
-        "metadata-text": ("metadata: author example-org", "metadata is text, not a mapping"),
-        "allowed-tools-list": ("allowed-tools: [Read, Write]", "allowed-tools is a list, not text"),
-        "allowed-tools-number": ("allowed-tools: 2", "allowed-tools is a number, not text"),
-        "license-number": ("license: 2", "license is a number, not text"),
-        "license-list": ("license: [MIT]", "license is a list, not text"),
-        "compatibility-empty": ("compatibility: ''", "compatibility is empty"),
-        "compatibility-null": ("compatibility:", "compatibility is empty"),
-        "compatibility-blank": ("compatibility: '   '", "compatibility is empty"),
+        "metadata-number": ("metadata:\n  version: 1.4", "metadata value version is a number (1.4): some hosts accept "
+                            "that, but the Agent Skills specification gives text values, which some hosts require; "
+                            "quote it"),
+        "metadata-list-value": ("metadata:\n  tags: [a, b]", "metadata value tags is a YAML list (['a', 'b']): "),
+        "metadata-mapping-value": ("metadata:\n  a: {b: c}", "metadata value a is a YAML mapping ({'b': 'c'}): "),
+        "metadata-number-key": ("metadata:\n  1: one", "metadata key 1 is a number: some hosts accept that, but the "
+                                "Agent Skills specification gives text keys"),
+        "metadata-list": ("metadata: [a, b]", "metadata is a YAML list: some hosts accept that, but the Agent Skills "
+                          "specification gives a mapping of text keys to text values, which some hosts require"),
+        "metadata-text": ("metadata: author example-org", "metadata is text: some hosts accept that, but the Agent "
+                          "Skills specification gives a mapping"),
+        "allowed-tools-list": ("allowed-tools: [Read, Write]", "allowed-tools is a YAML list: some hosts accept that, "
+                               "but the Agent Skills specification gives a space-separated string, which some hosts "
+                               "require"),
+        "allowed-tools-number": ("allowed-tools: 2", "allowed-tools is a number: "),
+        "license-number": ("license: 2", "license is a number: "),
+        "license-list": ("license: [MIT]", "license is a YAML list: "),
+        "compatibility-empty": ("compatibility: ''", "compatibility is empty: some hosts accept that, but the Agent "
+                                "Skills specification gives 1 to 500 characters, which some hosts require"),
+        "compatibility-null": ("compatibility:", "compatibility is empty: "),
+        "compatibility-blank": ("compatibility: '   '", "compatibility is empty: "),
     }
 
     def _spec(self):
         with tempfile.TemporaryDirectory() as tmp:
             for label, (extra, said) in self.SPEC.items():
                 with self.subTest(label):
-                    errors, _ = self._check(tmp, label, f"name: good-skill\ndescription: Use when asked.\n{extra}\n")
-                    self.assertEqual(len(errors), 1, errors)
-                    self.assertIn(said, errors[0])
-                    self.assertIn("the Agent Skills specification", errors[0])
+                    skill = make_skill(Path(tmp) / label, md_bytes=(f"---\nname: good-skill\ndescription: Use when "
+                                                                    f"asked.\n{extra}\n---\n\n# Body\n").encode("utf-8"))
+                    errors, warnings = validate_skill.check(skill)
+                    self.assertEqual(errors, [])
+                    self.assertEqual(len(warnings), 1, warnings)
+                    self.assertTrue(warnings[0].startswith(said), warnings)
+                    self.assertIn("some hosts accept that, but the Agent Skills specification gives ", warnings[0])
+                    for strict, rc in ((False, 0), (True, 1)):  # it packages; --strict counts it as a warning
+                        with contextlib.redirect_stdout(io.StringIO()):
+                            self.assertEqual(validate_skill.main([str(skill)] + ["--strict"] * strict), rc)
             for label, extra in (("spec-example", "license: Apache-2.0\nmetadata:\n  author: example-org\n  version: \"1.0\""),
                                  ("tools", "allowed-tools: Bash(git:*) Bash(jq:*) Read"),
                                  ("compat", "compatibility: Requires Python 3.10 or later")):
@@ -1632,14 +1647,28 @@ class EleventhReview(unittest.TestCase):
                     self.assertEqual(self._check(tmp, label, f"name: good-skill\ndescription: Use when asked.\n{extra}\n"),
                                      ([], []))
 
-    def test_the_specifications_shapes_are_errors_without_pyyaml(self):
-        """N3: each shape above passed with 0 errors and 0 warnings at cbeb000."""
+    def test_the_specifications_shapes_are_warnings_without_pyyaml(self):
+        """N3: each shape above passed with 0 errors and 0 warnings at cbeb000; 265fb3f made each an ERROR, which
+        stopped 9 of 442 real, working skills from packaging."""
         with without_pyyaml():
             self._spec()
 
     @unittest.skipUnless(_has_pyyaml(), "PyYAML is not installed here")
-    def test_the_specifications_shapes_are_errors_with_pyyaml(self):
+    def test_the_specifications_shapes_are_warnings_with_pyyaml(self):
         self._spec()
+
+    def test_the_docs_say_the_specifications_shapes_are_warnings_strict_counts(self):
+        """The lead, 2026-09-30: the docs say these are warnings and that --strict counts them."""
+        skill_md = " ".join((REPO / "sc2" / "SKILL.md").read_text(encoding="utf-8").split())
+        warnings = skill_md.split("**Warnings:**", 1)[1].split("**Why the description", 1)[0]
+        errors = skill_md.split("**Errors:**", 1)[1].split("**Warnings:**", 1)[0]
+        self.assertIn("`allowed-tools` that is not text", warnings)
+        self.assertNotIn("`allowed-tools` that is not text", errors)
+        self.assertIn("some hosts accept the other forms; `--strict` treats each as an error", warnings)
+        readme = " ".join((REPO / "README.md").read_text(encoding="utf-8").split())
+        self.assertIn("warnings, since some hosts accept the other forms (`--strict` treats each as an error)", readme)
+        doc = " ".join(validate_skill.__doc__.split())
+        self.assertIn("warnings, since some hosts accept the other forms (--strict counts them)", doc)
 
     def test_the_docs_say_the_specification_not_the_upload_rules(self):
         """N3: "the upload rules" stood for the open specification; a host's stricter rule is named as a host's."""
