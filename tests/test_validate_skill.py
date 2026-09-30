@@ -1,6 +1,9 @@
 """
 Tests for sc2/scripts/validate_skill.py — Skillshaper (sc2) v1.4 | standard library only
 tests/test_validate_skill.py | Created: 2026-09-30 03:55 ET
+Updated: 2026-09-30 14:08 ET — SeventhReview: frontmatter PyYAML refuses (with and without PyYAML), an unlistable folder,
+a referenced name holding a space, the BOM rule's edges and every text type at every level; each
+failed before its fix.
 
 Run from the repository root:
     python -B -m unittest discover -s tests -v
@@ -464,6 +467,166 @@ class SixthReview(unittest.TestCase):
                              ["references/notes.md", "scripts/bom.py", "scripts/c.yaml", "scripts/x.txt"], warnings)
             self.assertFalse([w for w in warnings if "w.ps1" in w], warnings)  # Windows PowerShell reads UTF-8 by its BOM
             self.assertFalse([e for e in errors if "does not compile" in e], errors)
+
+
+@contextlib.contextmanager
+def unlistable(folder):
+    """A folder this user may not list: on Windows an ACL deny of RD, elsewhere no permission bits."""
+    if os.name == "nt":
+        user = os.environ.get("USERNAME", "")
+        r = subprocess.run(["icacls", str(folder), "/deny", f"{user}:(RD)"], capture_output=True, text=True)
+        if r.returncode != 0:
+            raise unittest.SkipTest("icacls could not deny this folder")
+        try:
+            yield
+        finally:
+            subprocess.run(["icacls", str(folder), "/remove:d", user], capture_output=True, text=True)
+    else:
+        if os.geteuid() == 0:
+            raise unittest.SkipTest("root lists everything")
+        mode = os.stat(folder).st_mode
+        os.chmod(folder, 0)
+        try:
+            yield
+        finally:
+            os.chmod(folder, mode)
+
+
+@contextlib.contextmanager
+def without_pyyaml():
+    """The built-in frontmatter reader, whether or not PyYAML is installed: `import yaml` raises ImportError."""
+    import sys
+    saved = sys.modules.get("yaml", "<absent>")
+    sys.modules["yaml"] = None
+    try:
+        yield
+    finally:
+        if saved == "<absent>":
+            del sys.modules["yaml"]
+        else:
+            sys.modules["yaml"] = saved
+
+
+def _has_pyyaml():
+    try:
+        import yaml  # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
+class SeventhReview(unittest.TestCase):
+    """The seventh review (eff4bb1): frontmatter YAML refuses, read alike with and without PyYAML; a folder
+    that cannot be listed; a referenced name holding a space; the BOM rule's edges and every text type."""
+
+    REFUSED = {"colon": "description: Use when: the user asks.", "colon-end": "description: Use when asked:",
+               "tab": "description:\tUse when asked.", "no-space": "description:Use when asked.",
+               "unclosed-list": "description: [Use when asked", "unclosed-map": "description: {use: when asked",
+               "unclosed-quote": "description: \"Use when asked"}
+    AGREED = {"bool": ("description: yes", None), "comment": ("description: Use when asked #not a comment", "Use when asked"),
+              "quoted-colon": ("description: \"Use when: the user asks.\"", "Use when: the user asks."),
+              "quoted-hash": ("description: 'Use when # asked'", "Use when # asked")}
+
+    def _frontmatter_cases(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            for label, line in self.REFUSED.items():
+                with self.subTest(label):
+                    md = f"---\nname: good-skill\n{line}\n---\n\n# Body\n".encode("utf-8")
+                    skill = make_skill(Path(tmp) / label, md_bytes=md)
+                    errors, _ = validate_skill.check(skill)
+                    self.assertEqual(len(errors), 1, errors)
+                    self.assertTrue(errors[0].startswith("frontmatter is not valid YAML"), errors)
+                    out = io.StringIO()
+                    with contextlib.redirect_stdout(out):
+                        rc = validate_skill.main([str(skill), "--strict"])
+                    self.assertEqual(rc, 1)
+                    self.assertIn("good-skill: 1 error(s)", out.getvalue())
+            for label, (line, want) in self.AGREED.items():
+                with self.subTest(label):
+                    text = f"---\nname: good-skill\n{line}\n---\n\n# Body\n"
+                    fm, _ = validate_skill._parse_frontmatter(text)
+                    got = fm.get("description")
+                    self.assertEqual(got if isinstance(got, str) else None, want, fm)
+                    skill = make_skill(Path(tmp) / label, md_bytes=text.encode("utf-8"))
+                    errors, warnings = validate_skill.check(skill)
+                    if want is None:
+                        self.assertEqual(errors, ["frontmatter has no description"])
+                    else:
+                        self.assertEqual(errors, [])
+                        self.assertFalse([w for w in warnings if "when to use" in w], warnings)
+
+    @unittest.skipUnless(_has_pyyaml(), "PyYAML is not installed here")
+    def test_frontmatter_pyyaml_refuses_is_an_error_line_with_pyyaml(self):
+        self._frontmatter_cases()
+
+    def test_frontmatter_pyyaml_refuses_is_an_error_line_without_pyyaml(self):
+        with without_pyyaml():
+            self._frontmatter_cases()
+
+    def test_a_folder_that_cannot_be_listed_is_an_error_line_not_a_traceback(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            skill = make_skill(Path(tmp) / "a", body="See references/guide.md.",
+                               files={"references/guide.md": "g\n", "references/secret/x.md": "x\n", "private/x.md": "x\n"})
+            with unlistable(skill / "references" / "secret"), unlistable(skill / "private"):
+                errors, _ = validate_skill.check(skill)
+                out = io.StringIO()
+                with contextlib.redirect_stdout(out):
+                    rc = validate_skill.main([str(skill)])
+            self.assertEqual(sorted(e.split(" ")[0] for e in errors), ["private/", "references/secret/"], errors)
+            for e in errors:
+                self.assertRegex(e, r"^\S+/ could not be listed \(.+\); check its permissions$")
+            self.assertEqual(rc, 1)
+            self.assertIn("good-skill: 2 error(s)", out.getvalue())
+            # tests/ at the root is never entered, so a folder there that cannot be listed is no concern
+            skill = make_skill(Path(tmp) / "b", files={"tests/private/t.py": "pass\n"})
+            with unlistable(skill / "tests" / "private"):
+                errors, _ = validate_skill.check(skill)
+            self.assertEqual(errors, [])
+
+    def test_a_referenced_name_holding_a_space_is_resolved_and_not_an_orphan(self):
+        body = ("See references/my guide.md and assets/my file.txt, then [the guide](references/my%20guide.md), "
+                "`references/my guide.md` and <assets/my%20file.txt>.")
+        with tempfile.TemporaryDirectory() as tmp:
+            skill = make_skill(tmp, body=body, files={"references/my guide.md": "# g\n", "assets/my file.txt": "x\n"})
+            errors, warnings = validate_skill.check(skill)
+            self.assertEqual(errors, [], errors)
+            self.assertFalse([w for w in warnings if "orphan" in w], warnings)
+            skill = make_skill(tmp, "other-skill", body="See references/my guide.md.", files={"assets/my file.txt": "x\n"})
+            errors, warnings = validate_skill.check(skill)
+            self.assertEqual(len(errors), 1, errors)
+            self.assertIn("does not exist", errors[0])
+            # a name only mentioned in its %20 form is still mentioned
+            skill = make_skill(tmp, "third-skill", body="Read [it](assets/my%20file.txt).", files={"assets/my file.txt": "x\n"})
+            _, warnings = validate_skill.check(skill)
+            self.assertFalse([w for w in warnings if "orphan" in w], warnings)
+
+    def test_the_bom_rule_decides_by_what_runs_and_reads_every_text_type_at_every_level(self):
+        bom = "﻿"
+        files = {"references/notes.md": f"{bom}#!/bin/sh\nnot a script, a note\n",   # a note whose first line looks like a shebang
+                 "scripts/plain.sh": f"{bom}echo hi\n",                              # a shell reads the BOM as part of the command
+                 "scripts/pwsh.ps1": f"{bom}#!/usr/bin/env pwsh\nWrite-Host hi\n",   # Windows PowerShell reads its BOM
+                 "scripts/Upper.PY": "def (:\n",                                     # compiled whatever the case of .py
+                 "scripts/conf.toml": f"{bom}[a]\nb = 1\n", "scripts/app.js": f"{bom}console.log(1)\n",
+                 "scripts/rows.jsonl": f'{bom}{{"a": 1}}\n', "scripts/table.csv": f"{bom}a,b\n",
+                 "scripts/doc.xml": f"{bom}<a/>\n", "scripts/Makefile": f"{bom}all:\n\techo\n",
+                 "scripts/latin.js": "// caf\xe9\n".encode("cp1252"),               # a type the validator once never read
+                 "LICENSE": "caf\xe9\n".encode("cp1252"),                            # root-level, shipped byte-for-byte
+                 "README.md": f"{bom}# hi\n", "run.sh": f"{bom}#!/bin/sh\necho hi\n"}
+        with tempfile.TemporaryDirectory() as tmp:
+            skill = make_skill(tmp, body="See " + ", ".join(f for f in files if f.split("/")[0] in ("references", "scripts", "assets")) + ".",
+                               files=files)
+            errors, warnings = validate_skill.check(skill)
+            self.assertEqual(sorted(e.split(" ")[0] for e in errors), ["run.sh", "scripts/Upper.PY", "scripts/latin.js", "scripts/plain.sh"], errors)
+            self.assertTrue([e for e in errors if e.startswith("scripts/Upper.PY does not compile")], errors)
+            self.assertTrue([e for e in errors if e.startswith("scripts/latin.js is not UTF-8")], errors)
+            self.assertTrue([e for e in errors if e.startswith("run.sh has a UTF-8 byte-order mark (BOM) before its #! line")], errors)
+            self.assertTrue([e for e in errors if e.startswith("scripts/plain.sh starts with a UTF-8 byte-order mark (BOM), which a shell")], errors)
+            self.assertEqual(sorted(w.split(" ")[0] for w in warnings if "byte-order mark" in w),
+                             ["README.md", "references/notes.md", "scripts/Makefile", "scripts/app.js", "scripts/conf.toml",
+                              "scripts/doc.xml", "scripts/rows.jsonl", "scripts/table.csv"], warnings)
+            self.assertFalse([w for w in warnings if "references/notes.md" in w and "#!" in w], warnings)
+            self.assertEqual([w.split(" (")[0] for w in warnings if "not UTF-8" in w], ["LICENSE is not UTF-8"], warnings)
+            self.assertFalse([line for line in errors + warnings if "pwsh.ps1" in line], errors + warnings)
 
 
 if __name__ == "__main__":

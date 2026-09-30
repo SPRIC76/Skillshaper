@@ -1,6 +1,9 @@
 """
 Tests for sc2/scripts/package_dual.py — Skillshaper (sc2) v1.4 | standard library only
 tests/test_package_dual.py | Created: 2026-09-30 03:55 ET
+Updated: 2026-09-30 14:08 ET — SeventhReview: a folder that takes no new file (spun for hours), --version, a folder at an
+archive's name, a full disk, a held SKILL.md in the installed copy, a file dated before 1980, an
+unlistable folder, a double failure while landing; each failed before its fix.
 
 Run from the repository root:
     python -B -m unittest discover -s tests -v
@@ -16,7 +19,9 @@ import io
 import os
 import stat
 import subprocess
+import sys
 import tempfile
+import time
 import unittest
 import zipfile
 from pathlib import Path
@@ -726,6 +731,285 @@ class SixthReview(unittest.TestCase):
                 self.assertEqual(rc, 1, printed.getvalue())
                 self.assertIn("could not be written", printed.getvalue())
                 self.assertEqual({p.name: p.read_bytes() for p in out.iterdir()}, before)
+
+
+@contextlib.contextmanager
+def no_new_files(folder):
+    """A folder that exists but takes no new file from this user: on Windows an ACL deny of WD and AD (what
+    C:\\ or C:\\Program Files gives a non-elevated user; os.access still says writable, since it reads only
+    the READONLY attribute), elsewhere no write bit (which root ignores). The deny is lifted afterwards."""
+    if os.name == "nt":
+        user = os.environ.get("USERNAME", "")
+        r = subprocess.run(["icacls", str(folder), "/deny", f"{user}:(WD,AD)"], capture_output=True, text=True)
+        if r.returncode != 0:
+            raise unittest.SkipTest("icacls could not deny this folder")
+        try:
+            yield
+        finally:
+            subprocess.run(["icacls", str(folder), "/remove:d", user], capture_output=True, text=True)
+    else:
+        if os.geteuid() == 0:
+            raise unittest.SkipTest("root writes everywhere")
+        mode = os.stat(folder).st_mode
+        os.chmod(folder, 0o555)
+        try:
+            yield
+        finally:
+            os.chmod(folder, mode)
+
+
+@contextlib.contextmanager
+def unlistable(folder):
+    """A folder this user may not list: on Windows an ACL deny of RD, elsewhere no permission bits."""
+    if os.name == "nt":
+        user = os.environ.get("USERNAME", "")
+        r = subprocess.run(["icacls", str(folder), "/deny", f"{user}:(RD)"], capture_output=True, text=True)
+        if r.returncode != 0:
+            raise unittest.SkipTest("icacls could not deny this folder")
+        try:
+            yield
+        finally:
+            subprocess.run(["icacls", str(folder), "/remove:d", user], capture_output=True, text=True)
+    else:
+        if os.geteuid() == 0:
+            raise unittest.SkipTest("root lists everything")
+        mode = os.stat(folder).st_mode
+        os.chmod(folder, 0)
+        try:
+            yield
+        finally:
+            os.chmod(folder, mode)
+
+
+class SeventhReview(unittest.TestCase):
+    """The seventh review (eff4bb1): an output or an installed copy that takes no new file, the --version
+    value, a folder at an archive's name, a full disk, a held SKILL.md in the installed copy, a file dated
+    before 1980, a folder that cannot be listed, and what a double failure while landing names."""
+
+    def _first_run(self, tmp):
+        """A packaged skill, then a change to it; returns (skill, out, archives before)."""
+        skill = make_skill(Path(tmp) / "src", body="Run scripts/a.py.", files={"scripts/a.py": "print(1)\n"})
+        out = Path(tmp) / "out"
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(package_dual.main([str(skill), "--version", "1.0", "--output", str(out)]), 0)
+        (skill / "scripts" / "b.py").write_text("print(2)\n", encoding="utf-8")
+        (skill / "SKILL.md").write_text(GOOD_MD.format(name="good-skill", body="Run scripts/a.py and scripts/b.py."),
+                                        encoding="utf-8", newline="\n")
+        return skill, out, {p.name: p.read_bytes() for p in out.iterdir()}
+
+    def _run(self, *args, timeout=20):
+        """The packager from the command line, killed after timeout seconds: a run that spins is a failure, not a hang."""
+        cmd = [sys.executable, "-B", str(SCRIPTS / "package_dual.py"), *map(str, args)]
+        try:
+            r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout)
+        except subprocess.TimeoutExpired:
+            self.fail(f"still running after {timeout} s: {' '.join(cmd)}")
+        return r.returncode, r.stdout + r.stderr
+
+    def test_an_output_this_user_may_not_add_files_to_is_one_message_at_once(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            skill = make_skill(Path(tmp) / "src")
+            out = Path(tmp) / "out"
+            out.mkdir()
+            with no_new_files(out):
+                started = time.monotonic()
+                rc, printed = self._run(skill, "--version", "1.0", "--output", out)
+                took = time.monotonic() - started
+            self.assertEqual(rc, 1, printed)
+            self.assertLess(took, 10, printed)
+            self.assertNotIn("Traceback", printed)
+            self.assertIn(str(out), printed)
+            self.assertRegex(printed, r"takes no new file from this user \(.+\); choose an --output")
+            self.assertEqual(list(out.iterdir()), [])
+
+    def test_an_installed_copy_this_user_may_not_add_files_to_is_one_message_at_once(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            skill = make_skill(Path(tmp) / "src", files={"scripts/run.py": "print(2)\n"})
+            home = Path(tmp) / "home"
+            target = make_skill(home, files={"scripts/run.py": "print(1)\n"})
+            before = {p.relative_to(target).as_posix(): p.read_bytes() for p in target.rglob("*") if p.is_file()}
+            with no_new_files(target):
+                started = time.monotonic()
+                rc, printed = self._run(skill, "--version", "1.0", "--output", Path(tmp) / "out", "--deploy", home)
+                took = time.monotonic() - started
+            self.assertEqual(rc, 1, printed)
+            self.assertLess(took, 10, printed)
+            self.assertNotIn("Traceback", printed)
+            self.assertRegex(printed, r"Deploy refused: .+good-skill could not be replaced \(.+\)")
+            self.assertEqual({p.relative_to(target).as_posix(): p.read_bytes() for p in target.rglob("*") if p.is_file()}, before)
+
+    @unittest.skipUnless(os.name == "nt", "the READONLY attribute on a folder is a Windows matter")
+    def test_a_read_only_output_folder_neither_spins_nor_tracebacks(self):
+        """Windows lets a file be made in a folder carrying the READONLY attribute, though os.access says no."""
+        with tempfile.TemporaryDirectory() as tmp:
+            skill = make_skill(Path(tmp) / "src")
+            out = Path(tmp) / "out"
+            out.mkdir()
+            subprocess.run(["attrib", "+R", str(out)], check=True, capture_output=True)
+            try:
+                started = time.monotonic()
+                rc, printed = self._run(skill, "--version", "1.0", "--output", out)
+                took = time.monotonic() - started
+            finally:
+                subprocess.run(["attrib", "-R", str(out)], capture_output=True)
+            self.assertLess(took, 10, printed)
+            self.assertNotIn("Traceback", printed)
+            self.assertEqual(rc, 0, printed)
+            self.assertEqual(sorted(p.name for p in out.iterdir()), ["good-skill-v1.0.zip", "good-skill.skill"])
+
+    def test_a_version_that_is_not_digits_letters_dots_and_dashes_is_refused_before_anything_is_built(self):
+        bad = ["1.0/x", "", "a*b", " 1.0", "1.0 ", "1 0", "..\\..\\evil", "/../../pwn", "1.0\\x", ".hidden", "-1"]
+        with tempfile.TemporaryDirectory() as tmp:
+            skill = make_skill(Path(tmp) / "src")
+            out = Path(tmp) / "out"
+            for version in bad:
+                with self.subTest(repr(version)):
+                    printed = io.StringIO()
+                    with contextlib.redirect_stdout(printed):
+                        rc = package_dual.main([str(skill), "--version", version, "--output", str(out)])
+                    self.assertEqual(rc, 1, printed.getvalue())
+                    self.assertIn("--version takes digits, letters, dots and dashes", printed.getvalue())
+                    self.assertNotIn("Valid", printed.getvalue())
+                    self.assertFalse(out.exists())
+                    self.assertEqual([p.name for p in Path(tmp).iterdir()], ["src"])  # nothing written anywhere else
+            for version in ("1.0", "2026.09.30", "1.0-rc1", "v2"):
+                with self.subTest(version):
+                    with contextlib.redirect_stdout(io.StringIO()):
+                        rc = package_dual.main([str(skill), "--version", version, "--output", str(out)])
+                    self.assertEqual(rc, 0)
+                    self.assertTrue((out / f"good-skill-v{version}.zip").is_file())
+
+    def test_a_folder_at_an_archives_name_is_named_as_a_folder(self):
+        for which in ("good-skill.skill", "good-skill-v1.0.zip"):
+            with self.subTest(which), tempfile.TemporaryDirectory() as tmp:
+                skill = make_skill(Path(tmp) / "src")
+                out = Path(tmp) / "out"
+                (out / which).mkdir(parents=True)
+                (out / which / "keep.txt").write_text("mine\n", encoding="utf-8")
+                printed = io.StringIO()
+                with contextlib.redirect_stdout(printed):
+                    rc = package_dual.main([str(skill), "--version", "1.0", "--output", str(out)])
+                self.assertEqual(rc, 1, printed.getvalue())
+                self.assertIn(f"{out / which} could not be written (a folder stands at this name)", printed.getvalue())
+                self.assertNotIn("unlock or close", printed.getvalue())
+                self.assertEqual([p.name for p in out.iterdir()], [which])
+                self.assertEqual((out / which / "keep.txt").read_text(encoding="utf-8"), "mine\n")
+
+    def test_a_full_disk_names_the_archive_and_says_to_free_space(self):
+        import errno
+        full = OSError(errno.ENOSPC, "No space left on device")
+
+        def at_write(*a, **k):
+            raise full
+
+        def at_copy(src, dst, *a, **k):
+            raise OSError(errno.ENOSPC, "No space left on device", str(dst))
+
+        points = (("good-skill.skill", "zipfile.ZipFile.writestr", at_write), ("good-skill-v1.0.zip", "shutil.copyfile", at_copy),
+                  ("good-skill.skill", "os.open", at_write))
+        for named, dotted, fake in points:
+            with self.subTest(dotted), tempfile.TemporaryDirectory() as tmp:
+                skill, out, before = self._first_run(tmp)
+                owner, attr = dotted.rsplit(".", 1)
+                holder = package_dual
+                for part in owner.split("."):
+                    holder = getattr(holder, part)
+                real = getattr(holder, attr)
+                setattr(holder, attr, fake)
+                printed = io.StringIO()
+                try:
+                    with contextlib.redirect_stdout(printed):
+                        rc = package_dual.main([str(skill), "--version", "1.0", "--output", str(out)])
+                finally:
+                    setattr(holder, attr, real)
+                self.assertEqual(rc, 1, printed.getvalue())
+                self.assertIn(f"{out / named} could not be written (No space left on device); free some space", printed.getvalue())
+                self.assertNotIn(".part", printed.getvalue())
+                self.assertNotIn("unlock or close", printed.getvalue())
+                self.assertEqual({p.name: p.read_bytes() for p in out.iterdir()}, before)
+
+    def test_a_held_skill_md_in_the_installed_copy_is_a_refusal_before_anything_is_built(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            skill = make_skill(Path(tmp) / "src")
+            home = Path(tmp) / "home"
+            target = make_skill(home)
+            out = Path(tmp) / "out"
+            printed = io.StringIO()
+            with unreadable(target / "SKILL.md"), contextlib.redirect_stdout(printed):
+                rc = package_dual.main([str(skill), "--version", "1.0", "--output", str(out), "--deploy", str(home)])
+            self.assertEqual(rc, 1, printed.getvalue())
+            self.assertRegex(printed.getvalue(), r"Deploy refused: .+SKILL\.md could not be read \(.+\)")
+            self.assertFalse(out.exists())
+            self.assertTrue((target / "SKILL.md").is_file())
+
+    def test_a_file_dated_before_1980_is_packaged_dated_1980_and_named(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            skill = make_skill(Path(tmp) / "src", body="See references/old.md.", files={"references/old.md": "old\n"})
+            os.utime(skill / "references" / "old.md", (0, 0))
+            out = Path(tmp) / "out"
+            printed = io.StringIO()
+            with contextlib.redirect_stdout(printed):
+                rc = package_dual.main([str(skill), "--version", "1.0", "--output", str(out)])
+            self.assertEqual(rc, 0, printed.getvalue())
+            self.assertRegex(printed.getvalue(), r"references/old\.md is dated 19(69|70)-\d\d-\d\d, before .*1980")
+            with zipfile.ZipFile(out / "good-skill.skill") as zf:
+                self.assertEqual(zf.getinfo("good-skill/references/old.md").date_time, (1980, 1, 1, 0, 0, 0))
+                self.assertEqual(zf.read("good-skill/references/old.md"), b"old\n")
+
+    def test_a_folder_that_cannot_be_listed_is_a_read_failure_not_a_traceback(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            skill = make_skill(Path(tmp) / "src", body="See references/guide.md.",
+                               files={"references/guide.md": "g\n", "references/secret/x.md": "x\n"})
+            out = Path(tmp) / "out"
+            with unlistable(skill / "references" / "secret"):
+                with self.assertRaises(package_dual.ReadFailed) as cm:
+                    package(skill, out)
+                printed = io.StringIO()
+                with contextlib.redirect_stdout(printed):
+                    rc = package_dual.main([str(skill), "--version", "1.0", "--output", str(Path(tmp) / "out2")])
+            self.assertEqual(Path(cm.exception.filename), skill / "references" / "secret")
+            self.assertEqual(rc, 1, printed.getvalue())
+            self.assertRegex(printed.getvalue(), r"references/secret/ could not be listed \(.+\)")
+            self.assertFalse((Path(tmp) / "out2").exists())
+
+    def test_a_double_failure_while_landing_names_every_file_that_no_longer_matches(self):
+        """The .zip cannot be set aside, and by then a hold has arrived on the .skill's aside and on the new
+        .skill at its name: the message names both, the old .zip beside them, and what to do."""
+        with tempfile.TemporaryDirectory() as tmp:
+            skill, out, before = self._first_run(tmp)
+            real_replace, real_unlink = package_dual.os.replace, Path.unlink
+
+            def replace(src, dst, *a):
+                s, d = Path(src), Path(dst)
+                if (s.name == "good-skill-v1.0.zip" and d.suffix == ".old") or (s.suffix == ".old" and d.name == "good-skill.skill"):
+                    raise PermissionError(13, "Permission denied (simulated)", str(src), None, str(dst))
+                return real_replace(src, dst, *a)
+
+            def unlink(self, missing_ok=False):
+                if self.name == "good-skill.skill":
+                    raise PermissionError(13, "Permission denied (simulated)", str(self))
+                return real_unlink(self, missing_ok=missing_ok)
+
+            package_dual.os.replace, Path.unlink = replace, unlink
+            printed = io.StringIO()
+            try:
+                with contextlib.redirect_stdout(printed):
+                    rc = package_dual.main([str(skill), "--version", "1.0", "--output", str(out)])
+            finally:
+                package_dual.os.replace, Path.unlink = real_replace, real_unlink
+            self.assertEqual(rc, 1, printed.getvalue())
+            left = sorted(p.name for p in out.iterdir())
+            aside = [n for n in left if n.endswith(".old")]
+            self.assertEqual(len(aside), 1, left)
+            self.assertEqual(left, ["good-skill-v1.0.zip", "good-skill.skill", aside[0]])
+            self.assertEqual((out / "good-skill-v1.0.zip").read_bytes(), before["good-skill-v1.0.zip"])
+            self.assertEqual((out / aside[0]).read_bytes(), before["good-skill.skill"])
+            self.assertNotEqual((out / "good-skill.skill").read_bytes(), before["good-skill.skill"])
+            message = printed.getvalue()
+            self.assertIn(str(out / aside[0]), message)
+            self.assertRegex(message, r"the earlier good-skill\.skill is at .+\.old and the new one stands at ")
+            self.assertIn(str(out / "good-skill.skill"), message)
+            self.assertRegex(message, r"(?i)delete .*rename .*\.old")
 
 
 class Source(unittest.TestCase):

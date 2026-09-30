@@ -33,6 +33,13 @@ back if either move fails); a source file that cannot be read, an archive that c
 replaced and an --output that cannot be made are each one message naming the file and the
 reason, the earlier archives untouched; run inside the skill through a link that loops back
 into it, the archives go beside its real folder, so an archive never packs itself.
+Updated: 2026-09-30 14:08 ET — v1.8: an --output folder, or an installed copy, that exists but takes no new file from
+this user is one message at once (temporary names are made with O_EXCL, never tempfile's 2^31 retries
+behind a Windows ACL); --version takes digits, letters, dots and dashes only; a folder at an archive's
+name, a full disk and an unreachable path each get their own advice, naming the archive and never a
+temporary; a folder that cannot be listed and an installed copy whose SKILL.md is held are one message;
+a file dated before 1980 is packaged dated 1980-01-01 and named; a double failure while landing names
+every file left where it does not belong.
 
   {name}.skill       what claude.ai and the Claude desktop app install: upload it
                       in the skill settings, or open the file card an agent presents
@@ -55,9 +62,12 @@ when the path given reaches it through a link that loops back into it), and an -
 inside it or inside the deploy target, or one that is a file, is refused. Both archives
 land together or not at all: each is built under a temporary name beside its target and
 the pair is moved into place only when both are complete, the earlier pair put back if
-either move fails. A source file that cannot be read, an archive that cannot be
-replaced (left read-only, held open) and an --output that cannot be made each stop the
-run with one message naming the file and the reason; the earlier archives are untouched.
+either move fails. A source file or folder that cannot be read, an archive that cannot be
+replaced (left read-only, held open, a folder standing at its name), an --output that cannot
+be made or that takes no new file from this user, and a full disk each stop the run with one
+message naming the file and the reason; the earlier archives are untouched. --version takes
+digits, letters, dots and dashes (1.0, 2.1-rc1), so the .zip always lands in --output. A
+file dated before 1980, which the zip format cannot hold, is stored dated 1980-01-01 and named.
 
 --deploy HOME also replaces the contents of HOME/{name}/ with exactly what was
 packaged, only when that folder is absent, empty, or an installed copy of this same
@@ -76,14 +86,16 @@ Usage:
 """
 
 import argparse
+import errno
 import fnmatch
 import importlib.util
 import os
 import re
+import secrets
 import shutil
 import stat
 import sys
-import tempfile
+import time
 import zipfile
 from pathlib import Path
 
@@ -98,20 +110,6 @@ JUNK = EXCLUDE_FILES | {"__MACOSX", "__pycache__", ".pytest_cache", "node_module
 # would delete them. Anything else the package leaves out (.gitignore, which packagers before
 # 1.4 shipped) is replaced and named.
 MARKS = {".git", ".env", ".envrc", ".venv", ".hg", ".svn"}
-# Written with LF line endings whatever the checkout uses, when the whole file is UTF-8
-# with no NUL byte and it is one of these types, a script that starts with #!, or a file
-# with no suffix (LICENSE, Makefile). Everything else is stored byte-for-byte: a binary
-# need not hold a NUL byte (a PDF's xref offsets count its CRLFs), and some text must
-# keep CRLF (.ics, .bat).
-TEXT_SUFFIXES = {".md", ".markdown", ".mdx", ".rst", ".adoc", ".tex", ".bib", ".txt",
-                 ".json", ".jsonl", ".ndjson", ".ipynb", ".yaml", ".yml", ".toml", ".ini", ".cfg",
-                 ".conf", ".properties", ".csv", ".tsv", ".xml", ".svg", ".html", ".htm",
-                 ".css", ".scss", ".sass", ".less", ".sql", ".graphql", ".gql", ".proto",
-                 ".py", ".sh", ".bash", ".zsh", ".fish", ".ps1", ".psm1",
-                 ".js", ".mjs", ".cjs", ".ts", ".mts", ".cts", ".jsx", ".tsx", ".vue", ".svelte",
-                 ".rb", ".pl", ".pm", ".php", ".lua", ".r", ".jl", ".go", ".rs", ".java",
-                 ".kt", ".kts", ".scala", ".swift", ".c", ".h", ".cc", ".cpp", ".hpp", ".cs",
-                 ".dart", ".ex", ".exs", ".erl", ".hs", ".ml", ".clj", ".tf", ".hcl", ".gradle"}
 
 
 def _say(text=""):
@@ -132,6 +130,12 @@ def _validator():
 
 _V = _validator()  # the validator also holds archive_cut, so both walk the skill alike
 _inside = _V._inside
+# Written with LF line endings whatever the checkout uses, when the whole file is UTF-8
+# with no NUL byte and it is one of these types (the validator's list, so both read the
+# same files as text), a script that starts with #!, or a file with no suffix (LICENSE,
+# Makefile). Everything else is stored byte-for-byte: a binary need not hold a NUL byte
+# (a PDF's xref offsets count its CRLFs), and some text must keep CRLF (.ics, .bat).
+TEXT_SUFFIXES = _V.TEXT_SUFFIXES
 
 
 def should_exclude(rel_path: Path) -> bool:
@@ -169,7 +173,11 @@ def _files(skill_path: Path, out=None):
     found = []
 
     def walk(folder: Path, chain):
-        for child in sorted(folder.iterdir()):
+        try:
+            children = sorted(folder.iterdir())
+        except OSError as e:  # a folder this run may not list: named as a read failure, not a traceback
+            raise ReadFailed(e.errno, e.strerror or str(e), str(folder)) from e
+        for child in children:
             rel = child.relative_to(skill_path.parent)
             real = os.path.realpath(child)
             if child.is_dir():
@@ -198,9 +206,15 @@ def create_zip(skill_path: Path, output_path: Path) -> int:
             arcname = file_path.relative_to(skill_path.parent)
             try:
                 data = file_path.read_bytes()
+                modified = time.localtime(file_path.stat().st_mtime)
             except OSError as e:
                 raise ReadFailed(e.errno, e.strerror or str(e), str(file_path)) from e
-            info = zipfile.ZipInfo.from_file(file_path, arcname.as_posix())
+            # The zip format holds no date before 1980: a file a tar or a container layer left dated 1970
+            # is stored dated 1980-01-01 (strict_timestamps=False) and named, not a traceback.
+            info = zipfile.ZipInfo.from_file(file_path, arcname.as_posix(), strict_timestamps=False)
+            if modified.tm_year < 1980:
+                _say(f"ℹ️ {arcname.relative_to(arcname.parts[0]).as_posix()} is dated "
+                     f"{time.strftime('%Y-%m-%d', modified)}, before the zip format's 1980 floor; its entry is dated 1980-01-01")
             info.compress_type = zipfile.ZIP_DEFLATED
             mode = 0o755 if data.startswith(b"#!") else 0o644  # a script with a shebang is stored executable
             if _is_text(file_path, data):
@@ -212,15 +226,52 @@ def create_zip(skill_path: Path, output_path: Path) -> int:
 
 
 def _unwritable(path: Path):
-    """Why an archive already at path could not be replaced (left read-only, held open with no
-    share mode), or None; asked before anything is built, so a run that would fail changes nothing."""
+    """Why an archive already at path could not be replaced, as (reason, what to do), or None: a folder
+    standing at its name, or a file left read-only or held open with no share mode. Asked before
+    anything is built, so a run that would fail changes nothing."""
     if not path.exists():
         return None
+    if path.is_dir():
+        return "a folder stands at this name", "move it aside or choose another --output"
     try:
         open(path, "r+b").close()
     except OSError as e:
-        return e.strerror or str(e)
+        return e.strerror or str(e), "unlock or close it and run again"
     return None
+
+
+def _fresh(folder: Path, prefix: str, suffix: str, directory=False) -> Path:
+    """A new empty file (or folder) in folder under a name nothing else holds, made at once with O_EXCL.
+    Not tempfile.mkstemp or mkdtemp: on Windows those retry a PermissionError up to 2**31 times whenever
+    os.access calls the folder writable, and os.access reads only the READONLY attribute, never an ACL
+    (C:\\, C:\\Program Files, an icacls deny), so a folder that takes no new file spun for hours. Here it
+    is the OSError it is, at once."""
+    for _ in range(100):
+        path = folder / f"{prefix}{secrets.token_hex(4)}{suffix}"
+        try:
+            if directory:
+                path.mkdir()
+            else:
+                os.close(os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644))
+        except FileExistsError:
+            continue
+        return path
+    raise FileExistsError(errno.EEXIST, "no free name after 100 tries", str(folder / f"{prefix}*{suffix}"))
+
+
+def _write_failure(e: OSError, out: Path) -> str:
+    """One line for an archive that could not be written: the archive (never a temporary), the reason,
+    and what to do, by the error: a full disk, a folder that takes no new file, an unreachable path, or
+    a file held or left read-only."""
+    path = Path(e.filename) if e.filename else out
+    why = e.strerror or str(e)
+    if e.errno == errno.ENOSPC:
+        return f"{path} could not be written ({why}); free some space on that drive and run again."
+    if path == out:
+        return f"{out} takes no new file from this user ({why}); choose an --output you may write to."
+    if e.errno in (errno.ENOENT, errno.EINVAL):
+        return f"{path} could not be written ({why}); give --output a folder this system can reach."
+    return f"{path} could not be written ({why}); unlock or close it and run again."
 
 
 def _land(pairs):
@@ -232,21 +283,21 @@ def _land(pairs):
         for tmp, target in pairs:
             try:
                 if target.exists():
-                    fd, old = tempfile.mkstemp(dir=target.parent, prefix=target.name + ".", suffix=".old")
-                    os.close(fd)
+                    old = _fresh(target.parent, target.name + ".", ".old")
                     try:
                         os.replace(target, old)
                     except OSError:
                         os.unlink(old)
                         raise
-                    aside.append((Path(old), target))
+                    aside.append((old, target))
                 os.replace(tmp, target)
                 landed.append(target)
             except OSError as e:
                 raise OSError(e.errno, e.strerror or str(e), str(target)) from e
     except OSError as e:
         # Put things back with every step tried, then judge by what is left on disk: an earlier
-        # archive still under its aside name, or a new file that could not be removed, is named.
+        # archive still under its aside name, and a new file that could not be removed (one whose
+        # aside is still on disk stands at the earlier one's name), are each named with what to do.
         for new in landed:
             try:
                 new.unlink()
@@ -257,14 +308,18 @@ def _land(pairs):
                 os.replace(old, back)
             except OSError:
                 pass
-        left = [str(old) for old, _ in aside if old.exists()]
-        backs = {back for _, back in aside}
-        stuck = [str(new) for new in landed if new not in backs and new.exists()]
+        left = [(old, back) for old, back in aside if old.exists()]
+        held_backs = {back for _, back in left}
+        stuck = [new for new in landed if new.exists() and (new in held_backs or new not in {b for _, b in aside})]
         if left or stuck:
-            what = "; ".join(filter(None, [f"the earlier archives are at {', '.join(left)}" if left else "",
-                                           f"the new {', '.join(stuck)} could not be removed" if stuck else ""]))
-            raise RuntimeError(f"{e.filename} could not be written ({e.strerror}), and putting things back failed "
-                               f"too: {what}") from e
+            what = []
+            for old, back in left:
+                what.append(f"the earlier {back.name} is at {old}"
+                            + (f" and the new one stands at {back}" if back in stuck else f" and {back} is empty"))
+            what.extend(f"the new {new.name} stands at {new}" for new in stuck if new not in held_backs)
+            raise RuntimeError(f"{e.filename} could not be written ({e.strerror}), and putting things back failed too: "
+                               f"{'; '.join(what)}. The archives at their names no longer match: when they are free, "
+                               f"delete each new file, rename each .old back to its name, and run again") from e
         raise
     for old, _ in aside:
         try:
@@ -284,13 +339,21 @@ def build_archives(skill_path: Path, skill_file: Path, zip_file: Path) -> int:
     try:
         for target in (skill_file, zip_file):
             try:
-                fd, tmp = tempfile.mkstemp(dir=out, prefix=target.name + ".", suffix=".part")
-            except OSError as e:  # the folder takes no new file: named by the archive it was for
+                temps.append(_fresh(out, target.name + ".", ".part"))
+            except PermissionError as e:  # the folder takes no new file from this user: named as the folder
+                raise OSError(e.errno, e.strerror or str(e), str(out)) from e
+            except OSError as e:  # a full disk, a path gone: named by the archive it was for
                 raise OSError(e.errno, e.strerror or str(e), str(target)) from e
-            os.close(fd)
-            temps.append(Path(tmp))
-        count = create_zip(skill_path, temps[0])
-        shutil.copyfile(temps[0], temps[1])
+        for target, tmp, step in ((skill_file, temps[0], "build"), (zip_file, temps[1], "copy")):
+            try:
+                if step == "build":
+                    count = create_zip(skill_path, tmp)
+                else:
+                    shutil.copyfile(temps[0], tmp)
+            except ReadFailed:
+                raise
+            except OSError as e:  # a full disk while writing: named by the archive, never the temporary
+                raise OSError(e.errno, e.strerror or str(e), str(target)) from e
         _land(list(zip(temps, (skill_file, zip_file))))
     finally:
         for tmp in temps:  # gone once landed; left only by a failure
@@ -299,6 +362,8 @@ def build_archives(skill_path: Path, skill_file: Path, zip_file: Path) -> int:
 
 
 def _skill_name_in(folder: Path):
+    """The name an installed copy's SKILL.md declares, or None; an OSError (the file held with no share
+    mode, no permission) is the caller's to name."""
     md = folder / "SKILL.md"
     if not md.is_file():
         return None
@@ -395,16 +460,20 @@ def _refusal(skill_name: str, home: Path, source=None):
         return f"{target} is the folder being packaged; deploy to another skills home"
     # Replace only what is absent, empty, or an installed copy of this same skill:
     # one wrong --deploy argument must never empty somebody's other files.
-    if target.is_dir() and any(not (c.name.startswith(".old-") or _is_junk(c.name)) for c in target.iterdir()):
-        existing = _skill_name_in(target)
-        if existing != skill_name:
-            held = f"holds the skill '{existing}'" if existing else "holds files that are not a skill (no SKILL.md)"
-            return f"{target} {held}, not '{skill_name}'"
-        kept = _left_out(target, skill_name)[0]
-        if kept:
-            shown = ", ".join(kept[:8]) + (f" and {len(kept) - 8} more" if len(kept) > 8 else "")
-            return (f"{target} holds {shown}, which the package leaves out: it is a working copy, and "
-                    "replacing it would delete them; deploy to a skills home of installed copies")
+    try:
+        if target.is_dir() and any(not (c.name.startswith(".old-") or _is_junk(c.name)) for c in target.iterdir()):
+            existing = _skill_name_in(target)
+            if existing != skill_name:
+                held = f"holds the skill '{existing}'" if existing else "holds files that are not a skill (no SKILL.md)"
+                return f"{target} {held}, not '{skill_name}'"
+            kept = _left_out(target, skill_name)[0]
+            if kept:
+                shown = ", ".join(kept[:8]) + (f" and {len(kept) - 8} more" if len(kept) > 8 else "")
+                return (f"{target} holds {shown}, which the package leaves out: it is a working copy, and "
+                        "replacing it would delete them; deploy to a skills home of installed copies")
+    except OSError as e:  # its SKILL.md held with no share mode, a folder in it that cannot be listed
+        return (f"{e.filename or target} could not be read ({e.strerror or e}); close the program holding it open, "
+                "or check its permissions")
     return None
 
 
@@ -445,7 +514,11 @@ def deploy(archive: Path, skill_name: str, home: Path, source=None) -> Path:
                 stale.append(child)
     # Move the old copy aside inside the folder, unpack, then drop it: the
     # replacement lands whole, or every old file goes back where it was.
-    aside = Path(tempfile.mkdtemp(prefix=".old-", dir=target))
+    try:
+        aside = _fresh(target, ".old-", "", directory=True)
+    except OSError as e:  # the installed copy takes no new file from this user: at once, not 2**31 retries
+        raise RuntimeError(f"{target} could not be replaced ({e.strerror or e}: this user may not add files to it); "
+                           "nothing changed") from e
     moved, unpacking = [], False
     try:
         for child in sorted(target.iterdir()):
@@ -490,6 +563,10 @@ def main(argv=None):
     ap.add_argument("--deploy", metavar="SKILLS_HOME", help="also install into SKILLS_HOME/<name>/")
     ap.add_argument("--strict", action="store_true", help="treat validator warnings as errors")
     args = ap.parse_args(argv)
+    if not re.fullmatch(r"[0-9A-Za-z][0-9A-Za-z.\-]*", args.version):  # it names the .zip: no separator, nothing odd
+        _say(f"❌ --version takes digits, letters, dots and dashes, starting with a digit or letter (1.0, 2.1-rc1); "
+             f"got {args.version!r}. Nothing packaged.")
+        return 1
 
     # abspath, not resolve(): a skill reached through a junction or symlink keeps
     # the link's name, as validate_skill.py reads it.
@@ -543,10 +620,10 @@ def main(argv=None):
         return 1
     skill_file = out / f"{name}.skill"
     zip_file = out / f"{name}-v{args.version}.zip"
-    for target in (skill_file, zip_file):  # an earlier archive left read-only or held open: found before anything is built
+    for target in (skill_file, zip_file):  # an earlier archive left read-only or held open, or a folder at its name
         why = _unwritable(target)
         if why:
-            _say(f"❌ {target} could not be written ({why}); unlock or close it and run again. Nothing changed.")
+            _say(f"❌ {target} could not be written ({why[0]}); {why[1]}. Nothing changed.")
             return 1
     try:
         count = build_archives(skill_path, skill_file, zip_file)
@@ -557,9 +634,8 @@ def main(argv=None):
     except RuntimeError as e:  # the earlier pair could not be put back: the message says where it is
         _say(f"❌ {e}")
         return 1
-    except OSError as e:  # a hold that the probe could not see (a handle open for reading blocks the move)
-        _say(f"❌ {e.filename or out} could not be written ({e.strerror or e}); unlock or close it and run again. "
-             f"Nothing changed.")
+    except OSError as e:  # a hold the probe could not see, a folder that takes no new file, a full disk
+        _say(f"❌ {_write_failure(e, out)} Nothing changed.")
         return 1
     _say(f"📦 {skill_file} ({count} files, {skill_file.stat().st_size / 1024:.1f} KB)")
     _say(f"📦 {zip_file}")
