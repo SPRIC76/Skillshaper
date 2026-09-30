@@ -117,4 +117,8 @@ scripts/validate_skill.py
 
 ## License
 
-MIT — see [LICENSE](LICENSE). Copyright (c) 2025 SPRIC76.
+Freeware — see [LICENSE](LICENSE). Copyright (c) 2026 MK1 Enterprise. Free to download and use; please link to this repository rather than rehosting it. Versions up to commit 5d20f49 were released under MIT and keep it.
+
+---
+
+Skillshaper · [Freeware](LICENSE) · [MK1 Made](https://mk1made.us)

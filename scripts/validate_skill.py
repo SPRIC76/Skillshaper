@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Skill validator — the base skill-creator's upload rules plus sc2's standards.
+Skill validator — the base skill-creator's upload rules plus Skillshaper's (sc2) standards.
 validate_skill.py v1.0 | 2026-09-15
 
 Errors are what claude.ai or the Skills API would reject, or what leaves the

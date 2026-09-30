@@ -1,21 +1,22 @@
 ---
 name: sc2
 description: >
-  Skill Creator 2: the packaging and quality standard for Agent Skills, layered
-  on Anthropic's skill-creator. Use whenever a skill is created, edited,
+  Skillshaper (id sc2, formerly Skill Creator 2): the packaging and quality
+  standard for Agent Skills, layered on Anthropic's skill-creator. Use when
+  asked for Skillshaper or sc2, and whenever a skill is created, edited,
   recalibrated, validated, packaged, uploaded to claude.ai, or deployed to a
-  local skills folder such as ~/.agents/skills - including "package this
-  skill", "make a .skill file", "check my skill", "why isn't my skill
-  triggering", "upgrade my skills", or before handing any skill to someone.
+  local skills folder such as ~/.agents/skills - including "shape this skill",
+  "package this skill", "make a .skill file", "check my skill", "why isn't my
+  skill triggering", "upgrade my skills", or before handing any skill to someone.
   Validates against the upload rules plus stricter checks (name equals folder,
   triggers in the description, every referenced file exists, no stale sandbox
   paths), then always produces both a .skill and a versioned .zip.
 metadata:
-  version: "1.1"
-  updated: "2026-09-15"
+  version: "1.3"
+  updated: "2026-09-30"
 ---
 
-# Skill Creator 2 — Packaging & Quality Standards
+# Skillshaper (sc2) — Packaging & Quality Standards
 
 This skill supplements Anthropic's `skill-creator` wherever it is installed (claude.ai, the Claude desktop app, a Claude Code plugin, or the `anthropics/skills` repository). Use skill-creator for the workflow — capture intent, draft, test prompts, evals, description optimization — and apply these standards on top. Without skill-creator, the standards below still stand on their own.
 
@@ -80,4 +81,4 @@ Replace skill-creator's single `.skill` in **Package and Present** with dual pac
 
 ---
 
-*⁰ Formerly: skill-creator-plus → skill-creator-2 → sc2 v1.0 (2026-02-10) → sc2 v1.1 (2026-09-15: validator, deploy, every surface named instead of one sandbox).*
+*⁰ Formerly: skill-creator-plus → skill-creator-2 → sc2 v1.0 (2026-02-10) → sc2 v1.1 (2026-09-15: validator, deploy, every surface named instead of one sandbox) → Skill-Shaper, sc2 v1.2 (2026-09-28: the name its maker gave it; the id and folder stay sc2, per section 5) → Skillshaper, sc2 v1.3 (2026-09-30: one word, as MK writes it).*

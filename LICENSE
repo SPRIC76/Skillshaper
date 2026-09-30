@@ -1,21 +1,40 @@
-MIT License
+Skillshaper — Freeware License
 
-Copyright (c) 2026 SPRIC76
+Copyright (c) 2026 MK1 Enterprise. All rights reserved.
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+Skillshaper is freeware: licensed, not sold, and free of charge. MK1
+Enterprise grants you a free, non-exclusive, non-transferable license to
+download, install, and use Skillshaper, at home or at work, for as long as
+you like, on any machine you own or control.
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+You may change your own copy to suit your own setup, and use the changed
+copy under this license on machines you own or control. You may not share,
+publish, or distribute a changed copy.
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+You may not:
+
+  - redistribute, repackage, mirror, or rehost Skillshaper outside of the
+    official channels (github.com/SPRIC76/Skillshaper and mk1made.us);
+  - sublicense, sell, rent, or lease Skillshaper to any third party;
+  - present Skillshaper, or any part of it, as your own work;
+  - remove or alter any copyright, trademark, or attribution notice.
+
+Linking to the official channels is always welcome.
+
+Earlier versions: everything published in github.com/SPRIC76/Skillshaper up
+to and including commit 5d20f49 was released under the MIT License, and
+copies of those versions keep that license. This license covers every
+version after it.
+
+All rights not expressly granted above are reserved by MK1 Enterprise.
+
+Skillshaper is provided "AS IS", without warranty of any kind, express or implied,
+including but not limited to the warranties of merchantability, fitness for
+a particular purpose, and noninfringement. In no event shall MK1 Enterprise
+be liable for any claim, damages, or other liability, whether in an action
+of contract, tort, or otherwise, arising from, out of, or in connection with
+Skillshaper or the use or other dealings in Skillshaper.
+
+This license terminates automatically if you violate any of its terms.
+Upon termination you must stop using Skillshaper and delete all copies in your
+possession.
