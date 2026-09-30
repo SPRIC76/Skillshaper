@@ -299,5 +299,74 @@ class ThirdReview(unittest.TestCase):
             self.assertFalse([w for w in warnings if "user folder" in w], warnings)
 
 
+class FourthReview(unittest.TestCase):
+    """The fourth review (1da47e9): older copies of this validator, and what the packager skips."""
+
+    def test_the_1_1_validator_and_a_docstring_on_its_opening_line_are_exempt(self):
+        own = Path(validate_skill.__file__).read_text(encoding="utf-8")
+        first = own.split('"""', 2)[1].strip().splitlines()[0]
+        v11 = own.replace(first, "Skill validator — the base skill-creator's upload rules plus sc2's standards.", 1)
+        inline = own.replace('"""\n' + first, '"""' + first, 1)
+        self.assertNotEqual(v11, own)
+        self.assertNotEqual(inline, own)
+        for label, text in (("v1.1", v11), ("docstring on the opening line", inline)):
+            with self.subTest(label), tempfile.TemporaryDirectory() as tmp:
+                skill = make_skill(tmp, body="Run scripts/validate_skill.py first.",
+                                   files={"scripts/validate_skill.py": text})
+                _, warnings = validate_skill.check(skill)
+                self.assertFalse([w for w in warnings if "validate_skill.py" in w], warnings)
+
+    def test_a_workspace_folder_is_not_entered(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            skill = make_skill(tmp, files={"references/scratch-workspace/SKILL.md": "# notes\n",
+                                           "references/scratch-workspace/bad.py": "def (:\n"})
+            errors, warnings = validate_skill.check(skill)
+            self.assertEqual(errors, [])
+            self.assertFalse([w for w in warnings if "workspace" in w], warnings)
+
+    def test_a_link_to_the_output_folder_is_not_entered_when_the_packager_names_it(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            skill = make_skill(Path(tmp) / "src")
+            dist = Path(tmp) / "dist"
+            dist.mkdir()
+            (dist / "good-skill.skill").write_bytes(b"PK")
+            link = skill / "references"
+            if os.name == "nt":
+                made = subprocess.run(["cmd", "/c", "mklink", "/J", str(link), str(dist)],
+                                      capture_output=True).returncode == 0
+            else:
+                os.symlink(dist, link, target_is_directory=True)
+                made = True
+            if not made:
+                self.skipTest("no junction on this platform")
+            _, warnings = validate_skill.check(skill, out=dist)
+            self.assertFalse([w for w in warnings if "good-skill.skill" in w], warnings)
+
+    def test_what_the_packager_drops_raises_no_error(self):
+        """A Mac's AppleDouble files (__MACOSX/, ._name) and other dotfiles never reach the archive."""
+        apple = b"\x00\x05\x16\x07\x00\x02\x00\x00Mac OS X        \xff\xfe"
+        with tempfile.TemporaryDirectory() as tmp:
+            skill = make_skill(tmp, body="Run scripts/run.py.",
+                               files={"scripts/run.py": "print('hi')\n",
+                                      "scripts/__MACOSX/._run.py": apple,
+                                      "scripts/._run.py": apple,
+                                      "references/.notes.md": apple})
+            errors, warnings = validate_skill.check(skill)
+            self.assertEqual(errors, [])
+            self.assertIn("junk in the skill folder: scripts/__MACOSX", warnings)
+
+    def test_a_script_carrying_a_binary_payload_is_not_held_to_utf8(self):
+        """A self-extracting script (#!, then tar or gzip bytes, which always hold a NUL) is packaged
+        byte-for-byte; a script saved in another encoding, or UTF-16, is still an error."""
+        shar = b"#!/bin/sh\nsed '1,/^exit$/d' \"$0\" | tar xz\nexit\n\x1f\x8b\x08\x00\r\n\x00\xff\r\n"
+        cp1252 = "#!/bin/sh\necho 'café'\n".encode("cp1252")
+        utf16 = "#!/bin/sh\necho hi\n".encode("utf-16")
+        with tempfile.TemporaryDirectory() as tmp:
+            skill = make_skill(tmp, body="Run scripts/unpack.sh, scripts/greet.sh, scripts/wide.sh.",
+                               files={"scripts/unpack.sh": shar, "scripts/greet.sh": cp1252, "scripts/wide.sh": utf16})
+            errors, _ = validate_skill.check(skill)
+            self.assertEqual(sorted(e.split(" ")[0] for e in errors), ["scripts/greet.sh", "scripts/wide.sh"], errors)
+
+
 if __name__ == "__main__":
     unittest.main()

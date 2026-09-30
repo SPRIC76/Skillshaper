@@ -13,13 +13,21 @@ Updated: 2026-09-30 05:25 ET — v1.3: the skill is walked as the packager reads
 a loop cut, dot-folders such as a deploy's .old-* not entered); any version of this
 validator, edited or not, is exempt by its first docstring line; c:/users/... is no
 one's user folder.
+Updated: 2026-09-30 06:03 ET — v1.4: every released version is exempt by its first docstring line (1.1
+named sc2's standards; a copy may open the docstring on the quotes' line); the walk leaves
+*-workspace folders and __MACOSX unentered and, given the packager's output folder, cuts a
+link into it as the packager does; a dotfile is not read, since it never ships;
+desktop.ini is junk; a script that starts with #! and carries a binary payload is not
+held to UTF-8.
 
 Errors are what claude.ai or the Skills API would reject, or what leaves the
 skill broken: frontmatter keys and limits, a name that differs from its folder,
 angle brackets in the description, a body over 500 lines, a referenced file that
 does not exist (bare or ./-prefixed; test files - *_selftest.py, test_*.py,
 *_test.py, anything under tests/ - name throwaway fixtures and are exempt),
-a bundled Python script that does not compile, a file that is not UTF-8.
+a bundled Python script that does not compile, a file that is not UTF-8 (a script
+that starts with #! and holds a NUL byte carries a binary payload, is stored
+byte-for-byte, and is exempt).
 
 Warnings are what makes a skill trigger badly or age badly: no "when to use" cue
 in the description (the description is all a model sees when it picks a skill),
@@ -43,8 +51,8 @@ import sys
 from pathlib import Path
 
 ALLOWED_KEYS = {"name", "description", "license", "allowed-tools", "metadata", "compatibility"}
-JUNK_DIRS = {"__pycache__", "node_modules", ".pytest_cache"}
-JUNK_FILES = {".DS_Store", "Thumbs.db"}
+JUNK_DIRS = {"__pycache__", "node_modules", ".pytest_cache", "__MACOSX"}
+JUNK_FILES = {".DS_Store", "Thumbs.db", "desktop.ini"}
 ROOT_SKIP_DIRS = {"evals", "tests"}
 BUNDLE_DIRS = ("references", "scripts", "assets")
 # A bundled path, written bare or with a ./ prefix; ../ and foo/scripts/ stay out.
@@ -112,6 +120,16 @@ def _mini_yaml(raw):
     return data
 
 
+def _carries_payload(path):
+    """A script that starts with #! and holds a NUL byte carries a binary payload after its text
+    (a self-extracting archive: tar and gzip bytes always hold a NUL), which the packager stores
+    byte-for-byte; it is not held to UTF-8. Python must be UTF-8 to run, so .py never is."""
+    if not path.is_file() or path.suffix.lower() == ".py":
+        return False
+    data = path.read_bytes()
+    return data.startswith(b"#!") and b"\0" in data
+
+
 def _read_utf8(path, rel, errors):
     """Text of path, or None after an ERROR line naming the file and the bad byte."""
     try:
@@ -121,36 +139,71 @@ def _read_utf8(path, rel, errors):
         return None
 
 
+# Every released version opens its docstring with this line; only the owner's name in it has changed
+# (1.1: "plus sc2's standards."), and a copy may start the docstring on the opening quotes' line.
+_SIGNATURE = re.compile(r"^(?:\"\"\"|''')?\s*Skill validator — the base skill-creator's upload rules plus "
+                        r".{1,40} standards\.$")
+
+
 def _is_this_validator(path):
-    """This file names the markers it hunts; a copy of it, of any version or edited, opens with the same
-    first docstring line and is exempt; another skill's file of the same name does not and is checked."""
-    signature = __doc__.strip().splitlines()[0]
+    """This file names the markers it hunts; a copy of it, of any released version or edited, opens
+    with the signature line and is exempt; another skill's file of the same name does not and is checked."""
     try:
         with open(path, encoding="utf-8", errors="replace") as f:
             head = [f.readline().strip() for _ in range(4)]
     except OSError:
         return False
-    return signature in head
+    return any(_SIGNATURE.match(line) for line in head)
 
 
-def _tree(skill):
+def _inside(path, folder):
+    """Is path the folder itself or somewhere inside it, links followed on both sides?"""
+    p, f = (os.path.normcase(os.path.realpath(x)) for x in (path, folder))
+    return p == f or p.startswith(f.rstrip(os.sep) + os.sep)
+
+
+def archive_cut(real, root, out, name, is_dir):
+    """Must a walk of the skill at root not take this link, because it reaches the archives
+    package_dual.py writes to out? The output folder and any folder above it are cut; when out
+    is a folder of its own, anything in it; when the archives go beside the skill, only the
+    archives themselves ({name}.skill, {name}-v*.zip): a LICENSE linked from the repository
+    root stays. Shared by the packager and this validator, so both read the same skill."""
+    if out is None or _inside(real, root):
+        return False
+    if _inside(out, real):
+        return True
+    if not _inside(root, out):
+        return _inside(real, out)
+    if is_dir or os.path.normcase(os.path.dirname(real)) != os.path.normcase(os.path.realpath(out)):
+        return False
+    base = os.path.basename(real)
+    return os.path.normcase(base) == os.path.normcase(name + ".skill") or fnmatch.fnmatch(base, name + "-v*.zip")
+
+
+def _tree(skill, out=None):
     """Every path under the skill as the packager reads it: links of every kind followed
-    alike, a link back to a folder already on the way down (a loop) cut, and folders that
-    never ship (__pycache__ and the like, dot-folders such as .git or the .old-* a locked
-    deploy leaves, evals/ and tests/ at the root) listed but not entered."""
+    alike, a link back to a folder already on the way down (a loop) or out to the archives
+    (archive_cut, when the packager names its output folder) cut, and folders that never
+    ship (__pycache__ and the like, dot-folders such as .git or the .old-* a locked deploy
+    leaves, *-workspace folders, evals/ and tests/ at the root) listed but not entered."""
+    root = os.path.realpath(skill)
     found = []
 
     def walk(folder, chain, top):
         for child in sorted(folder.iterdir()):
+            real = os.path.realpath(child)
+            is_dir = child.is_dir()
+            if archive_cut(real, root, out, skill.name, is_dir):
+                continue
             found.append(child)
-            if child.is_dir():
-                real = os.path.normcase(os.path.realpath(child))
-                if real in chain or child.name in JUNK_DIRS or child.name.startswith(".") \
-                        or (top and child.name in ROOT_SKIP_DIRS):
+            if is_dir:
+                key = os.path.normcase(real)
+                if key in chain or child.name in JUNK_DIRS or child.name.startswith(".") \
+                        or child.name.endswith("-workspace") or (top and child.name in ROOT_SKIP_DIRS):
                     continue
-                walk(child, chain | {real}, False)
+                walk(child, chain | {key}, False)
 
-    walk(skill, frozenset({os.path.normcase(os.path.realpath(skill))}), True)
+    walk(skill, frozenset({os.path.normcase(root)}), True)
     return found
 
 
@@ -160,8 +213,9 @@ def _is_test_file(rel):
                                             for pat in ("*_selftest.py", "test_*.py", "*_test.py"))
 
 
-def check(skill_dir):
-    """Return (errors, warnings) for one skill folder."""
+def check(skill_dir, out=None):
+    """Return (errors, warnings) for one skill folder; out, when package_dual.py passes its
+    output folder, cuts a link out to the archives as the packager does."""
     # abspath, not resolve(): '.' and '..' become the folder's own name, and a
     # junction or symlink an agent reaches the skill through keeps its name.
     skill = Path(os.path.abspath(skill_dir))
@@ -170,8 +224,8 @@ def check(skill_dir):
     if not md.is_file():
         return [f"{skill}: SKILL.md not found"], []
 
-    tree = _tree(skill)
-    nested = [p for p in tree if p.name == "SKILL.md" and p != md and p.is_file()]
+    tree = _tree(skill, out)
+    nested =[p for p in tree if p.name == "SKILL.md" and p != md and p.is_file()]
     if nested:
         errors.append("more than one SKILL.md (claude.ai accepts exactly one): "
                       + ", ".join(p.relative_to(skill).as_posix() for p in nested))
@@ -224,9 +278,12 @@ def check(skill_dir):
         warnings.append("trigger phrases sit in the body; move them into the description, "
                         "which is what decides whether the skill loads")
 
+    # A dotfile (.notes.md, a Mac's ._run.py) never reaches the archive, so it is not read.
     texts = {md: text}
     for d in BUNDLE_DIRS:
         for p in (p for p in tree if p.relative_to(skill).parts[0] == d):
+            if any(part.startswith(".") for part in p.relative_to(skill).parts) or _carries_payload(p):
+                continue
             if p.is_file() and p.suffix.lower() in {".md", ".txt", ".py", ".json", ".sh", ".ps1", ".yaml", ".yml"}:
                 t = _read_utf8(p, p.relative_to(skill).as_posix(), errors)
                 if t is not None:

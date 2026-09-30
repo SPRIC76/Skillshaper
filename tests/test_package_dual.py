@@ -413,6 +413,106 @@ class ThirdReview(unittest.TestCase):
                     self.assertNotIn(b"\r\n", zf.read("good-skill/" + rel), rel)
 
 
+class FourthReview(unittest.TestCase):
+    """The fourth review (1da47e9): archives beside the skill, upgrading older installs, and five edges."""
+
+    def _packaged(self, tmp):
+        return package(make_skill(Path(tmp) / "src", files={"scripts/run.py": "print(1)\n"}), Path(tmp) / "out")
+
+    def test_a_licence_linked_from_the_repo_root_survives_archives_written_beside_the_skill(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp) / "repo"
+            skill = make_skill(repo)
+            (repo / "LICENSE").write_text("Freeware\n", encoding="utf-8")
+            try:
+                os.symlink(repo / "LICENSE", skill / "LICENSE")
+                os.symlink(repo / "good-skill.skill", skill / "old.skill")  # a link to the archive itself
+            except (OSError, NotImplementedError):
+                self.skipTest("no file symlink on this account")
+            (repo / "good-skill.skill").write_bytes(b"PK old archive")
+            out = io.StringIO()
+            with chdir(skill), contextlib.redirect_stdout(out):
+                rc = package_dual.main([".", "--version", "1.0"])
+            self.assertEqual(rc, 0, out.getvalue())
+            self.assertEqual(entries(repo / "good-skill.skill"), ["good-skill/LICENSE", "good-skill/SKILL.md"])
+
+    def test_an_install_holding_a_dotfile_an_older_packager_shipped_is_upgraded_and_named(self):
+        leftovers = {".gitignore": "*.pyc\n", "._SKILL.md": b"\x00\x05\x16\x07", "__MACOSX/._SKILL.md": b"\x00",
+                     ".mypy_cache/x.json": "{}\n", ".ruff_cache/x": "r\n"}
+        with tempfile.TemporaryDirectory() as tmp:
+            archive = self._packaged(tmp)
+            home = Path(tmp) / "home"
+            target = make_skill(home, files=leftovers)
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                package_dual.deploy(archive, "good-skill", home)
+            self.assertEqual(sorted(p.relative_to(target).as_posix() for p in target.rglob("*") if p.is_file()),
+                             ["SKILL.md", "scripts/run.py"])
+            self.assertIn(".gitignore", out.getvalue())
+
+    def test_a_virtual_environment_marks_a_working_copy(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            archive = self._packaged(tmp)
+            home = Path(tmp) / "home"
+            target = make_skill(home, files={".venv/pyvenv.cfg": "home = x\n"})
+            with self.assertRaises(RuntimeError) as cm:
+                package_dual.deploy(archive, "good-skill", home)
+            self.assertIn(".venv", str(cm.exception))
+            self.assertTrue((target / ".venv" / "pyvenv.cfg").is_file())
+
+    def test_a_folder_holding_only_junk_counts_as_empty(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            archive = self._packaged(tmp)
+            home = Path(tmp) / "home"
+            (home / "good-skill").mkdir(parents=True)
+            (home / "good-skill" / "Thumbs.db").write_bytes(b"\x00junk")
+            package_dual.deploy(archive, "good-skill", home)
+            self.assertTrue((home / "good-skill" / "SKILL.md").is_file())
+
+    @unittest.skipUnless(os.name == "nt", "the READONLY attribute on a folder is a Windows matter")
+    def test_a_read_only_folder_in_the_old_copy_leaves_nothing_behind(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            archive = self._packaged(tmp)
+            home = Path(tmp) / "home"
+            target = make_skill(home, files={"references/ro/x.md": "x\n"})
+            subprocess.run(["attrib", "+R", str(target / "references")], check=True, capture_output=True)
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                package_dual.deploy(archive, "good-skill", home)
+            self.assertEqual(sorted(c.name for c in target.iterdir()), ["SKILL.md", "scripts"], out.getvalue())
+            self.assertNotIn("⚠️", out.getvalue())
+
+    def test_an_output_that_is_a_file_is_refused_before_packaging(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            skill = make_skill(Path(tmp) / "src")
+            afile = Path(tmp) / "afile"
+            afile.write_text("x\n", encoding="utf-8")
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                rc = package_dual.main([str(skill), "--version", "1.0", "--output", str(afile)])
+            self.assertEqual(rc, 1, out.getvalue())
+            self.assertIn("is a file", out.getvalue())
+            self.assertNotIn("Valid", out.getvalue())
+
+    def test_a_script_with_a_binary_payload_is_stored_byte_for_byte_and_executable(self):
+        shar = b"#!/bin/sh\nsed '1,/^exit$/d' \"$0\" | tar xz\nexit\n\x1f\x8b\x08\x00\r\n\x00\xff\r\n"
+        long_head = b"#!/usr/bin/env python3\n" + b"# text\n" * 1300 + b"\x00\x01\x02\r\n"
+        with tempfile.TemporaryDirectory() as tmp:
+            skill = make_skill(Path(tmp) / "src", files={"scripts/shar.sh": shar, "scripts/tool": long_head})
+            with zipfile.ZipFile(package(skill, Path(tmp) / "out")) as zf:
+                self.assertEqual(zf.read("good-skill/scripts/shar.sh"), shar)
+                self.assertEqual(zf.read("good-skill/scripts/tool"), long_head)
+                self.assertEqual(zf.getinfo("good-skill/scripts/shar.sh").external_attr >> 16 & 0o777, 0o755)
+
+    def test_what_a_mac_or_windows_leaves_in_a_folder_is_not_packaged(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            skill = make_skill(Path(tmp) / "src", files={"scripts/run.py": "print(1)\n",
+                                                         "scripts/desktop.ini": "[.ShellClassInfo]\n",
+                                                         "scripts/__MACOSX/notes.txt": "x\n"})
+            self.assertEqual(entries(package(skill, Path(tmp) / "out")),
+                             ["good-skill/SKILL.md", "good-skill/scripts/run.py"])
+
+
 class Source(unittest.TestCase):
     """Medium (second review): where the skill is read from and where the archives go."""
 
