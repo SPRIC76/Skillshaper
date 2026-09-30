@@ -40,7 +40,7 @@ Copy the `sc2/` folder, keeping its name, into the folder your agent loads its s
 | Any agent that reads the shared location | `~/.agents/skills/sc2/` or `.agents/skills/sc2/` |
 | Claude Code | `~/.claude/skills/sc2/` or `.claude/skills/sc2/` |
 | Cursor | `~/.cursor/skills/sc2/` or `.cursor/skills/sc2/` |
-| Codex | `~/.codex/skills/sc2/` |
+| Codex | `~/.agents/skills/sc2/` or `.agents/skills/sc2/` (the shared location) |
 
 ### Install by upload
 

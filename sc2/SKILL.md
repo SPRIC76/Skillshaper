@@ -100,7 +100,7 @@ Both are zip archives with `{name}/SKILL.md` at the root. The packager validates
 
 Where a skill goes depends on the host, so these are examples, one of several each; the README lists more:
 
-- a skills folder the agent loads at start: `--deploy ~/.agents/skills`, `--deploy ~/.claude/skills`, `--deploy ~/.cursor/skills` or `--deploy ~/.codex/skills` for every project, or a project's own `.agents/skills`;
+- a skills folder the agent loads at start: `--deploy ~/.agents/skills`, `--deploy ~/.claude/skills`, or `--deploy ~/.cursor/skills` for every project, or a project's own `.agents/skills`;
 - a host that installs by upload (claude.ai, for one): upload the `.skill`;
 - anything else: extract the `.zip` wherever that agent reads its skills.
 
