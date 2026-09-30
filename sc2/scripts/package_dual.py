@@ -40,6 +40,11 @@ name, a full disk and an unreachable path each get their own advice, naming the 
 temporary; a folder that cannot be listed and an installed copy whose SKILL.md is held are one message;
 a file dated before 1980 is packaged dated 1980-01-01 and named; a double failure while landing names
 every file left where it does not belong.
+Updated: 2026-09-30 14:46 ET — v1.9: a file dated before 1970 or past about 3000, which Windows' localtime refuses, is
+packaged at the zip format's nearest edge instead of failing as unreadable; a date past 2107 is stored 2107-12-31;
+each edge is one line for all its files, not one per file; a skills home that exists but takes no new folder
+from this user is refused before anything is built, in the voice of every other message; --version must start
+and end with a digit or letter and is at most 64 characters, so the .zip's name is one every file system takes.
 
   {name}.skill       what claude.ai and the Claude desktop app install: upload it
                       in the skill settings, or open the file card an agent presents
@@ -200,21 +205,36 @@ class ReadFailed(OSError):
 def create_zip(skill_path: Path, output_path: Path) -> int:
     """Write the archive of skill_path to output_path; raises ReadFailed for a source file the
     operating system would not let this run read (held open with no share mode, no permission)."""
-    count = 0
+    count, early, late = 0, [], []
     with zipfile.ZipFile(output_path, "w", zipfile.ZIP_DEFLATED) as zf:
         for file_path in _files(skill_path, output_path.parent):
             arcname = file_path.relative_to(skill_path.parent)
             try:
                 data = file_path.read_bytes()
-                modified = time.localtime(file_path.stat().st_mtime)
+                mtime = file_path.stat().st_mtime
             except OSError as e:
                 raise ReadFailed(e.errno, e.strerror or str(e), str(file_path)) from e
-            # The zip format holds no date before 1980: a file a tar or a container layer left dated 1970
-            # is stored dated 1980-01-01 (strict_timestamps=False) and named, not a traceback.
-            info = zipfile.ZipInfo.from_file(file_path, arcname.as_posix(), strict_timestamps=False)
-            if modified.tm_year < 1980:
-                _say(f"ℹ️ {arcname.relative_to(arcname.parts[0]).as_posix()} is dated "
-                     f"{time.strftime('%Y-%m-%d', modified)}, before the zip format's 1980 floor; its entry is dated 1980-01-01")
+            # The zip format holds a date from 1980 to 2107: a file a tar or a container layer left dated
+            # 1970 is stored dated 1980-01-01, one dated past 2107 is stored dated 2107-12-31, and each is
+            # named once for all such files (not a traceback, and not one line per file). The entry is
+            # built by hand: ZipInfo.from_file asks localtime, which on Windows refuses a time before 1970
+            # or past about the year 3000 with EINVAL, and that is no read failure of the file.
+            shown = arcname.relative_to(arcname.parts[0]).as_posix()
+            try:
+                modified = time.localtime(mtime)
+            except (OSError, OverflowError, ValueError):
+                modified = None
+            if modified is None:
+                date_time, where = ((1980, 1, 1, 0, 0, 0), early) if mtime < 0 else ((2107, 12, 31, 23, 59, 58), late)
+            elif modified.tm_year < 1980:
+                date_time, where = (1980, 1, 1, 0, 0, 0), early
+            elif modified.tm_year > 2107:
+                date_time, where = (2107, 12, 31, 23, 59, 58), late
+            else:
+                date_time, where = tuple(modified)[:6], None
+            if where is not None:
+                where.append(shown if modified is None else f"{shown} ({time.strftime('%Y-%m-%d', modified)})")
+            info = zipfile.ZipInfo(arcname.as_posix(), date_time=date_time)
             info.compress_type = zipfile.ZIP_DEFLATED
             mode = 0o755 if data.startswith(b"#!") else 0o644  # a script with a shebang is stored executable
             if _is_text(file_path, data):
@@ -222,6 +242,12 @@ def create_zip(skill_path: Path, output_path: Path) -> int:
             info.external_attr = (stat.S_IFREG | mode) << 16
             zf.writestr(info, data)
             count += 1
+    for names, edge, stored in ((early, "before the zip format's 1980 floor", "1980-01-01"),
+                                (late, "past the zip format's 2107 ceiling", "2107-12-31")):
+        if names:
+            listed = ", ".join(names[:3]) + (f" and {len(names) - 3} more" if len(names) > 3 else "")
+            _say(f"ℹ️ {len(names)} file{'s are' if len(names) > 1 else ' is'} dated {edge} ({listed}); "
+                 f"{'their entries are' if len(names) > 1 else 'its entry is'} dated {stored}")
     return count
 
 
@@ -454,6 +480,18 @@ def _refusal(skill_name: str, home: Path, source=None):
         return f"{target} is a link; deploy to the folder it points at instead"
     if target.exists() and not target.is_dir():
         return f"{target} is a file, not a skill folder"
+    if not target.exists() and home.is_dir():
+        # The skill's folder is new here: a home that exists but takes no new folder from this user
+        # (C:\Program Files, an ACL deny) is a refusal now, before anything is built, not after both
+        # archives are written. One empty probe folder, made with O_EXCL and removed at once.
+        try:
+            probe = _fresh(home, ".probe-", "", directory=True)
+        except OSError as e:
+            return f"{home} takes no new folder from this user ({e.strerror or e}); choose a skills home you may write to"
+        try:
+            probe.rmdir()
+        except OSError:
+            pass
     # A skill developed in place under its skills home is the very folder being
     # packaged: replacing it would delete everything the archive leaves out.
     if source is not None and (_inside(target, source) or _inside(source, target)):
@@ -502,7 +540,7 @@ def deploy(archive: Path, skill_name: str, home: Path, source=None) -> Path:
     try:
         target.mkdir(parents=True, exist_ok=True)
     except OSError as e:
-        raise RuntimeError(f"{target} could not be made ({e}); nothing changed") from e
+        raise RuntimeError(f"{target} could not be made ({e.strerror or e}); nothing changed") from e
     # An old copy an earlier deploy could not remove goes now (a read-only flag is cleared), or, still
     # in use, stays where it is: it is never moved inside the next one.
     stale = []
@@ -563,9 +601,12 @@ def main(argv=None):
     ap.add_argument("--deploy", metavar="SKILLS_HOME", help="also install into SKILLS_HOME/<name>/")
     ap.add_argument("--strict", action="store_true", help="treat validator warnings as errors")
     args = ap.parse_args(argv)
-    if not re.fullmatch(r"[0-9A-Za-z][0-9A-Za-z.\-]*", args.version):  # it names the .zip: no separator, nothing odd
-        _say(f"❌ --version takes digits, letters, dots and dashes, starting with a digit or letter (1.0, 2.1-rc1); "
-             f"got {args.version!r}. Nothing packaged.")
+    # It names the .zip: no separator, nothing odd, no trailing dot or dash (good-skill-v1.0..zip), and short
+    # enough for any file system (a 240-character version failed as "Invalid argument" on the output folder).
+    if not re.fullmatch(r"[0-9A-Za-z](?:[0-9A-Za-z.\-]*[0-9A-Za-z])?", args.version) or len(args.version) > 64:
+        _say(f"❌ --version takes digits, letters, dots and dashes, starting and ending with a digit or letter, at most "
+             f"64 characters (1.0, 2.1-rc1); got {args.version[:70]!r}"
+             f"{f' ({len(args.version)} characters)' if len(args.version) > 64 else ''}. Nothing packaged.")
         return 1
 
     # abspath, not resolve(): a skill reached through a junction or symlink keeps

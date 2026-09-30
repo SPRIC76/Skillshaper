@@ -6,3 +6,5 @@ Thumbs.db
 .env
 .env.*
 dist/
+sc2.skill
+sc2-v*.zip

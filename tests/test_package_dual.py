@@ -4,6 +4,9 @@ tests/test_package_dual.py | Created: 2026-09-30 03:55 ET
 Updated: 2026-09-30 14:08 ET — SeventhReview: a folder that takes no new file (spun for hours), --version, a folder at an
 archive's name, a full disk, a held SKILL.md in the installed copy, a file dated before 1980, an
 unlistable folder, a double failure while landing; each failed before its fix.
+Updated: 2026-09-30 14:46 ET — EighthReview: a file dated outside what the zip format or localtime holds, named once for all
+such files; a skills home that takes no new folder, refused before anything is built; a --version that would name
+the .zip badly; each failed before its fix. The READONLY guard's docstring says it is a guard, not a failed-first test.
 
 Run from the repository root:
     python -B -m unittest discover -s tests -v
@@ -17,6 +20,7 @@ import hashlib
 import importlib.util
 import io
 import os
+import re
 import stat
 import subprocess
 import sys
@@ -840,7 +844,9 @@ class SeventhReview(unittest.TestCase):
 
     @unittest.skipUnless(os.name == "nt", "the READONLY attribute on a folder is a Windows matter")
     def test_a_read_only_output_folder_neither_spins_nor_tracebacks(self):
-        """Windows lets a file be made in a folder carrying the READONLY attribute, though os.access says no."""
+        """A guard, not a test that failed first: Windows lets a file be made in a folder carrying the READONLY
+        attribute, though os.access says no, and the O_EXCL change must keep taking such a folder. It passed
+        against eff4bb1's packager too (the eighth review, finding 11)."""
         with tempfile.TemporaryDirectory() as tmp:
             skill = make_skill(Path(tmp) / "src")
             out = Path(tmp) / "out"
@@ -951,7 +957,8 @@ class SeventhReview(unittest.TestCase):
             with contextlib.redirect_stdout(printed):
                 rc = package_dual.main([str(skill), "--version", "1.0", "--output", str(out)])
             self.assertEqual(rc, 0, printed.getvalue())
-            self.assertRegex(printed.getvalue(), r"references/old\.md is dated 19(69|70)-\d\d-\d\d, before .*1980")
+            self.assertRegex(printed.getvalue(), r"1 file is dated before the zip format's 1980 floor \(references/old\.md "
+                                                 r"\(19(69|70)-\d\d-\d\d\)\); its entry is dated 1980-01-01")
             with zipfile.ZipFile(out / "good-skill.skill") as zf:
                 self.assertEqual(zf.getinfo("good-skill/references/old.md").date_time, (1980, 1, 1, 0, 0, 0))
                 self.assertEqual(zf.read("good-skill/references/old.md"), b"old\n")
@@ -1010,6 +1017,112 @@ class SeventhReview(unittest.TestCase):
             self.assertRegex(message, r"the earlier good-skill\.skill is at .+\.old and the new one stands at ")
             self.assertIn(str(out / "good-skill.skill"), message)
             self.assertRegex(message, r"(?i)delete .*rename .*\.old")
+
+
+@contextlib.contextmanager
+def no_new_folders(folder):
+    """A folder that exists but takes no new folder from this user: on Windows an ACL deny of AD (what
+    C:\\Program Files gives a non-elevated user), elsewhere no write bit. The deny is lifted afterwards."""
+    if os.name == "nt":
+        user = os.environ.get("USERNAME", "")
+        r = subprocess.run(["icacls", str(folder), "/deny", f"{user}:(AD)"], capture_output=True, text=True)
+        if r.returncode != 0:
+            raise unittest.SkipTest("icacls could not deny this folder")
+        try:
+            yield
+        finally:
+            subprocess.run(["icacls", str(folder), "/remove:d", user], capture_output=True, text=True)
+    else:
+        if os.geteuid() == 0:
+            raise unittest.SkipTest("root writes everywhere")
+        mode = os.stat(folder).st_mode
+        os.chmod(folder, 0o555)
+        try:
+            yield
+        finally:
+            os.chmod(folder, mode)
+
+
+class EighthReview(unittest.TestCase):
+    """The eighth review (0bb76bf): a file whose date the zip format or Windows' localtime cannot hold, named
+    once for all such files; a skills home that takes no new folder, refused before anything is built; a
+    --version that would name the .zip badly."""
+
+    def test_a_file_dated_outside_what_the_zip_format_or_localtime_holds_is_packaged_and_named_once(self):
+        """mtime -1 and year 1950 (before 1970: Windows' localtime raises EINVAL), year 2200 (past the zip
+        format's 2107) and year 5000 (past localtime's reach): each is stored at the nearest edge, its bytes
+        intact, and each edge is one line for all its files, not one line per file and never a read failure."""
+        files = {f"references/f{i}.md": f"f{i}\n" for i in range(5)}
+        files.update({"references/neg.md": "neg\n", "references/y1950.md": "1950\n", "references/y2200.md": "2200\n",
+                      "references/y5000.md": "5000\n"})
+        stamps = {"references/neg.md": -1, "references/y1950.md": -631152000, "references/y2200.md": 7258118400,
+                  "references/y5000.md": 95617584000}
+        with tempfile.TemporaryDirectory() as tmp:
+            skill = make_skill(Path(tmp) / "src", body="See " + ", ".join(files) + ".", files=files)
+            for rel in files:
+                stamp = stamps.get(rel, 0)
+                os.utime(skill / rel, (stamp, stamp))
+            out = Path(tmp) / "out"
+            printed = io.StringIO()
+            with contextlib.redirect_stdout(printed):
+                rc = package_dual.main([str(skill), "--version", "1.0", "--output", str(out)])
+            text = printed.getvalue()
+            self.assertEqual(rc, 0, text)
+            self.assertNotIn("could not be read", text)
+            self.assertEqual(text.count("1980 floor"), 1, text)
+            self.assertEqual(text.count("2107 ceiling"), 1, text)
+            self.assertRegex(text, r"7 files are dated before the zip format's 1980 floor \(references/f0\.md \(19(69|70)-\d\d-\d\d\), "
+                                   r"references/f1\.md \(19(69|70)-\d\d-\d\d\), references/f2\.md \(19(69|70)-\d\d-\d\d\) and 4 more\); "
+                                   r"their entries are dated 1980-01-01")
+            self.assertRegex(text, r"2 files are dated past the zip format's 2107 ceiling \(references/y2200\.md \(2(199|200)-\d\d-\d\d\), "
+                                   r"references/y5000\.md(?: \(5000-\d\d-\d\d\))?\); their entries are dated 2107-12-31")
+            with zipfile.ZipFile(out / "good-skill.skill") as zf:
+                for rel in ("references/neg.md", "references/y1950.md", "references/f0.md"):
+                    self.assertEqual(zf.getinfo(f"good-skill/{rel}").date_time, (1980, 1, 1, 0, 0, 0), rel)
+                for rel in ("references/y2200.md", "references/y5000.md"):
+                    self.assertEqual(zf.getinfo(f"good-skill/{rel}").date_time, (2107, 12, 31, 23, 59, 58), rel)
+                self.assertEqual(zf.getinfo("good-skill/SKILL.md").date_time[0], time.localtime().tm_year)
+                for rel, content in files.items():
+                    self.assertEqual(zf.read(f"good-skill/{rel}"), content.encode("utf-8"), rel)
+
+    def test_a_skills_home_that_takes_no_new_folder_is_refused_before_anything_is_built(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            skill = make_skill(Path(tmp) / "src")
+            home = Path(tmp) / "home"
+            home.mkdir()
+            out = Path(tmp) / "out"
+            with no_new_folders(home):
+                printed = io.StringIO()
+                with contextlib.redirect_stdout(printed):
+                    rc = package_dual.main([str(skill), "--version", "1.0", "--output", str(out), "--deploy", str(home)])
+                left = sorted(p.name for p in home.iterdir())
+            text = printed.getvalue()
+            self.assertEqual(rc, 1, text)
+            self.assertRegex(text, rf"Deploy refused: {re.escape(str(home))} takes no new folder from this user \([^()]+\); ")
+            self.assertNotIn("[WinError", text)
+            self.assertNotIn("Valid", text)
+            self.assertFalse(out.exists())
+            self.assertEqual(left, [], left)  # no probe folder left behind
+
+    def test_a_version_that_would_name_the_zip_badly_is_refused_before_anything_is_built(self):
+        """1.0. would land good-skill-v1.0..zip; 240 characters failed as "Invalid argument" blamed on --output."""
+        with tempfile.TemporaryDirectory() as tmp:
+            skill = make_skill(Path(tmp) / "src")
+            out = Path(tmp) / "out"
+            for version in ("1.0.", "1.0-", "1" * 65):
+                with self.subTest(version[:10]):
+                    printed = io.StringIO()
+                    with contextlib.redirect_stdout(printed):
+                        rc = package_dual.main([str(skill), "--version", version, "--output", str(out)])
+                    self.assertEqual(rc, 1, printed.getvalue())
+                    self.assertIn("--version takes digits, letters, dots and dashes", printed.getvalue())
+                    self.assertNotIn("--output", printed.getvalue())
+                    self.assertNotIn("Valid", printed.getvalue())
+                    self.assertFalse(out.exists())
+            self.assertIn("65 characters", printed.getvalue())
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(package_dual.main([str(skill), "--version", "1" * 64, "--output", str(out)]), 0)
+            self.assertTrue((out / f"good-skill-v{'1' * 64}.zip").is_file())
 
 
 class Source(unittest.TestCase):

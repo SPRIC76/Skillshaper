@@ -4,6 +4,9 @@ tests/test_validate_skill.py | Created: 2026-09-30 03:55 ET
 Updated: 2026-09-30 14:08 ET — SeventhReview: frontmatter PyYAML refuses (with and without PyYAML), an unlistable folder,
 a referenced name holding a space, the BOM rule's edges and every text type at every level; each
 failed before its fix.
+Updated: 2026-09-30 14:46 ET — EighthReview: the frontmatter parity table (every verdict recorded from PyYAML 6.0.3, run through
+the built-in reader always and through PyYAML where installed), the shapes the built-in reader refuses by name, the
+BOM as a name, and the docs and .gitignore against the code; each failed before its fix.
 
 Run from the repository root:
     python -B -m unittest discover -s tests -v
@@ -453,7 +456,7 @@ class SixthReview(unittest.TestCase):
                 self.assertIn("good-skill: 1 error(s)", out.getvalue())
 
     def test_a_bom_in_every_bundled_text_file_is_named_and_an_error_where_it_breaks_the_file(self):
-        bom = "﻿"
+        bom = validate_skill.BOM
         files = {"references/notes.md": f"{bom}# notes\n", "scripts/x.txt": f"{bom}x\n", "scripts/c.yaml": f"{bom}a: 1\n",
                  "scripts/w.ps1": f"{bom}Write-Host hi\n", "scripts/run.sh": f"{bom}#!/bin/sh\necho hi\n",
                  "scripts/data.json": f'{bom}{{"a": 1}}\n', "scripts/sheb.py": f"{bom}#!/usr/bin/env python3\nprint(1)\n",
@@ -549,8 +552,9 @@ class SeventhReview(unittest.TestCase):
                     self.assertEqual(got if isinstance(got, str) else None, want, fm)
                     skill = make_skill(Path(tmp) / label, md_bytes=text.encode("utf-8"))
                     errors, warnings = validate_skill.check(skill)
-                    if want is None:
-                        self.assertEqual(errors, ["frontmatter has no description"])
+                    if want is None:  # yes is a boolean to both readers: not text, so not a description
+                        self.assertEqual(len(errors), 1, errors)
+                        self.assertRegex(errors[0], r"^description is a boolean \(True\), not text")
                     else:
                         self.assertEqual(errors, [])
                         self.assertFalse([w for w in warnings if "when to use" in w], warnings)
@@ -601,7 +605,7 @@ class SeventhReview(unittest.TestCase):
             self.assertFalse([w for w in warnings if "orphan" in w], warnings)
 
     def test_the_bom_rule_decides_by_what_runs_and_reads_every_text_type_at_every_level(self):
-        bom = "﻿"
+        bom = validate_skill.BOM
         files = {"references/notes.md": f"{bom}#!/bin/sh\nnot a script, a note\n",   # a note whose first line looks like a shebang
                  "scripts/plain.sh": f"{bom}echo hi\n",                              # a shell reads the BOM as part of the command
                  "scripts/pwsh.ps1": f"{bom}#!/usr/bin/env pwsh\nWrite-Host hi\n",   # Windows PowerShell reads its BOM
@@ -627,6 +631,189 @@ class SeventhReview(unittest.TestCase):
             self.assertFalse([w for w in warnings if "references/notes.md" in w and "#!" in w], warnings)
             self.assertEqual([w.split(" (")[0] for w in warnings if "not UTF-8" in w], ["LICENSE is not UTF-8"], warnings)
             self.assertFalse([line for line in errors + warnings if "pwsh.ps1" in line], errors + warnings)
+
+
+class EighthReview(unittest.TestCase):
+    """The eighth review (0bb76bf): the built-in frontmatter reader reads what PyYAML reads, for the shapes a
+    SKILL.md uses, and refuses by name what it does not; the BOM is a name, not an invisible literal; the docs
+    and .gitignore say what the code does."""
+
+    # Every verdict here was recorded from PyYAML 6.0.3 on 2026-09-30, so the parity is checked against the
+    # record with and without PyYAML: ("text", key, value) reads that value and validates clean; ("none", key)
+    # reads None; ("typed", kind) is a description that is not text; ("error", fragment) is refused by both
+    # readers, the fragment being the built-in reader's wording.
+    PARITY = [
+        ("apostrophe", "description: 'Use when it''s asked.'", ("text", "description", "Use when it's asked.")),
+        ("escaped-quote", 'description: "Use when \\"asked\\"."', ("text", "description", 'Use when "asked".')),
+        ("escaped-backslash", 'description: "Use when asked\\\\now."', ("text", "description", "Use when asked\\now.")),
+        ("escaped-tab", 'description: "Use when\\tasked."', ("text", "description", "Use when\tasked.")),
+        ("escaped-unicode", 'description: "Use when asked \\u00e9"', ("text", "description", "Use when asked é")),
+        ("single-backslash", "description: 'Use when asked\\now.'", ("text", "description", "Use when asked\\now.")),
+        ("quoted-colon", 'description: "Use when: the user asks."', ("text", "description", "Use when: the user asks.")),
+        ("quoted-hash", "description: 'Use when # asked'", ("text", "description", "Use when # asked")),
+        ("comment", "description: Use when asked #not a comment", ("text", "description", "Use when asked")),
+        ("url", "description: Use when https://example.com/x is asked", ("text", "description", "Use when https://example.com/x is asked")),
+        ("colon-no-space", "description: Use when asked:now", ("text", "description", "Use when asked:now")),
+        ("trailing-space", "description: Use when asked   ", ("text", "description", "Use when asked")),
+        ("bool-mixed", "description: yEs", ("text", "description", "yEs")),
+        ("dotted", "description: Use when 2026.09.30 asks", ("text", "description", "Use when 2026.09.30 asks")),
+        ("continuation", "description: Use when asked\n  to do the thing.", ("text", "description", "Use when asked to do the thing.")),
+        ("continuation-two", "description: Use when asked\n  to do\n  the thing.", ("text", "description", "Use when asked to do the thing.")),
+        ("continuation-blank", "description: Use when asked\n\n  to do the thing.", ("text", "description", "Use when asked\nto do the thing.")),
+        ("quoted-continuation", 'description: "Use when asked\n  to do the thing."', ("text", "description", "Use when asked to do the thing.")),
+        ("single-continuation", "description: 'Use when asked\n  to do the thing.'", ("text", "description", "Use when asked to do the thing.")),
+        ("block-clip", "description: >\n  Use when\n  asked.\n", ("text", "description", "Use when asked.\n")),
+        ("block-strip", "description: >-\n  Use when asked.\n", ("text", "description", "Use when asked.")),
+        ("block-keep", "description: >+\n  Use when asked.\n", ("text", "description", "Use when asked.\n")),
+        ("block-indent-indicator", "description: >2\n  Use when asked.\n", ("text", "description", "Use when asked.\n")),
+        ("literal-strip", "description: |-\n  Use when\n  asked.\n", ("text", "description", "Use when\nasked.")),
+        ("literal-keep", "description: |+\n  Use when asked.\n", ("text", "description", "Use when asked.\n")),
+        ("one-space-indent", " description: Use when asked.", ("text", "description", "Use when asked.")),
+        ("quoted-key", '"description": Use when asked', ("text", "description", "Use when asked")),
+        ("duplicate", "description: one\ndescription: Use when asked", ("text", "description", "Use when asked")),
+        ("flow-comment", "allowed-tools: [Read, Write] # both", ("text", "allowed-tools", ["Read", "Write"])),
+        ("flow-quoted", "allowed-tools: [\"Read\", 'Write, too']", ("text", "allowed-tools", ["Read", "Write, too"])),
+        ("flow-multiline", "allowed-tools: [Read,\n  Write]", ("text", "allowed-tools", ["Read", "Write"])),
+        ("flow-trailing-comma", "allowed-tools: [Read, Write,]", ("text", "allowed-tools", ["Read", "Write"])),
+        ("flow-empty", "allowed-tools: []", ("text", "allowed-tools", [])),
+        ("block-list", "allowed-tools:\n  - Read\n  - Write", ("text", "allowed-tools", ["Read", "Write"])),
+        ("block-list-quoted", "allowed-tools:\n  - \"Read\"\n  - 'Write'", ("text", "allowed-tools", ["Read", "Write"])),
+        ("block-list-one-space", "allowed-tools:\n - Read\n - Write", ("text", "allowed-tools", ["Read", "Write"])),
+        ("flow-map", 'metadata: {version: "1.4", note: plain}', ("text", "metadata", {"version": "1.4", "note": "plain"})),
+        ("nested-map", 'metadata:\n  version: "1.4"\n  nested:\n    deep: 1', ("text", "metadata", {"version": "1.4", "nested": {"deep": 1}})),
+        ("nested-map-one-space", 'metadata:\n version: "1.4"', ("text", "metadata", {"version": "1.4"})),
+        ("hex", "metadata: {n: 0x1f, o: 017, b: 0b11, u: 1_000, s: 1:30, f: .5, e: 1e3}",
+         ("text", "metadata", {"n": 31, "o": 15, "b": 3, "u": 1000, "s": 90, "f": 0.5, "e": "1e3"})),
+        ("tilde", "description: ~", ("none", "description")),
+        ("null-word", "description: null", ("none", "description")),
+        ("null-upper", "description: NULL", ("none", "description")),
+        ("empty", "description:", ("none", "description")),
+        ("comment-only", "description: # nothing", ("none", "description")),
+        ("nested-empty", "metadata:\n", ("none", "metadata")),
+        ("bool", "description: yes", ("typed", "a boolean")),
+        ("bool-title", "description: Yes", ("typed", "a boolean")),
+        ("bool-upper", "description: NO", ("typed", "a boolean")),
+        ("float", "description: 1.4", ("typed", "a number")),
+        ("int", "description: 12", ("typed", "a number")),
+        ("date", "description: 2026-09-30", ("typed", "a date")),
+        ("colon", "description: Use when: the user asks.", ("error", "unquoted ': '")),
+        ("colon-end", "description: Use when asked:", ("error", "unquoted ': '")),
+        ("continuation-colon", "description: Use when asked\n  to: do it", ("error", "unquoted ': '")),
+        ("tab-after-key", "description:\tUse when asked.", ("error", "tab after")),
+        ("tab-in-plain", "description: Use when\tasked.", ("error", "holds a tab")),
+        ("tab-indent", "metadata:\n\tversion: \"1.4\"", ("error", "starts with a tab")),
+        ("no-space", "description:Use when asked.", ("error", "needs a space after the colon")),
+        ("unclosed-list", "description: [Use when asked", ("error", "opens a [ it does not close")),
+        ("unclosed-map", "description: {use: when asked", ("error", "opens a { it does not close")),
+        ("unclosed-quote", 'description: "Use when asked', ("error", "opens a quote it does not close")),
+        ("unclosed-quote-then-key", 'description: "Use when asked\nlicense: x', ("error", "opens a quote it does not close")),
+        ("text-after-quote", 'description: "Use" when asked', ("error", "text after its closing quote")),
+        ("text-after-bracket", "allowed-tools: [Read] Write", ("error", "text after its closing ]")),
+        ("unknown-escape", 'description: "Use \\q when asked"', ("error", "escape \\q")),
+        ("alias", "description: *a", ("error", "alias")),
+        ("list-not-map", "- description: Use when asked", ("error", "a list")),
+    ]
+    # What PyYAML reads that the built-in reader does not: refused by name, with the way to write it.
+    UNSUPPORTED = [("anchor", "description: &a Use when asked", "anchor"), ("tag", "description: !!str Use when asked", "tag"),
+                   ("flow-nested", "allowed-tools: [Read, [Write]]", "flow collection inside another"),
+                   ("complex-key", "? description\n: Use when asked", "complex key"),
+                   ("list-of-maps", "allowed-tools:\n  - name: Read", "list of mappings")]
+
+    def _parity(self, builtin, crlf=False):
+        with tempfile.TemporaryDirectory() as tmp:
+            for label, line, verdict in self.PARITY:
+                with self.subTest(label + (" crlf" if crlf else "")):
+                    head = " name: good-skill\n" if label == "one-space-indent" else "name: good-skill\n"
+                    if verdict[0] in ("text", "none") and verdict[1] != "description":
+                        head += "description: Use when asked.\n"
+                    text = f"---\n{head}{line}\n---\n\n# Body\n"
+                    if crlf:
+                        text = text.replace("\n", "\r\n")
+                    skill = make_skill(Path(tmp) / label, md_bytes=text.encode("utf-8"))
+                    if verdict[0] == "error":
+                        with self.assertRaises(ValueError) as cm:
+                            validate_skill._parse_frontmatter(text)
+                        self.assertTrue(str(cm.exception).startswith("frontmatter"), cm.exception)
+                        if builtin:
+                            self.assertIn(verdict[1], str(cm.exception))
+                        errors, _ = validate_skill.check(skill)
+                        self.assertEqual(len(errors), 1, errors)
+                        continue
+                    fm, _ = validate_skill._parse_frontmatter(text)
+                    errors, warnings = validate_skill.check(skill)
+                    if verdict[0] == "text":
+                        self.assertEqual(fm[verdict[1]], verdict[2])
+                        self.assertEqual(errors, [], errors)
+                        if verdict[1] == "description" and validate_skill.WHEN_CUE.search(verdict[2]):
+                            self.assertFalse([w for w in warnings if "when to use" in w], warnings)
+                    elif verdict[0] == "none":
+                        self.assertIsNone(fm[verdict[1]], fm)
+                        self.assertEqual(errors, ["frontmatter has no description"] if verdict[1] == "description" else [], errors)
+                    else:
+                        self.assertNotIsInstance(fm["description"], str)
+                        self.assertEqual(len(errors), 1, errors)
+                        self.assertRegex(errors[0], rf"^description is {verdict[1]} \(.+\), not text")
+            with self.subTest("name null"):
+                errors, _ = validate_skill.check(make_skill(Path(tmp) / "nn", md_bytes=b"---\nname: ~\ndescription: Use when asked.\n---\n"))
+                self.assertIn("frontmatter has no name", errors)
+
+    def test_the_built_in_reader_gives_the_recorded_pyyaml_verdict_on_every_shape(self):
+        with without_pyyaml():
+            self._parity(builtin=True)
+            self._parity(builtin=True, crlf=True)
+
+    @unittest.skipUnless(_has_pyyaml(), "PyYAML is not installed here")
+    def test_pyyaml_gives_the_recorded_verdict_on_every_shape(self):
+        self._parity(builtin=False)
+        self._parity(builtin=False, crlf=True)
+
+    def test_a_shape_the_built_in_reader_does_not_take_is_refused_by_name_with_the_way_to_write_it(self):
+        with without_pyyaml(), tempfile.TemporaryDirectory() as tmp:
+            for label, line, named in self.UNSUPPORTED:
+                with self.subTest(label):
+                    text = f"---\nname: good-skill\n{line}\n---\n\n# Body\n"
+                    with self.assertRaises(ValueError) as cm:
+                        validate_skill._parse_frontmatter(text)
+                    message = str(cm.exception)
+                    self.assertTrue(message.startswith("frontmatter uses "), message)
+                    self.assertIn(named, message)
+                    self.assertIn("install PyYAML", message)
+                    out = io.StringIO()
+                    with contextlib.redirect_stdout(out):
+                        rc = validate_skill.main([str(make_skill(Path(tmp) / label, md_bytes=text.encode("utf-8")))])
+                    self.assertEqual(rc, 1)
+                    self.assertIn("good-skill: 1 error(s)", out.getvalue())
+
+    @unittest.skipUnless(_has_pyyaml(), "PyYAML is not installed here")
+    def test_pyyaml_reads_the_shapes_the_built_in_reader_refuses_by_name(self):
+        for label, line, _ in self.UNSUPPORTED:
+            with self.subTest(label):
+                fm, _ = validate_skill._parse_frontmatter(f"---\nname: good-skill\n{line}\n---\n")
+                self.assertEqual(fm["name"], "good-skill")
+
+    def test_the_bom_is_a_name_not_an_invisible_literal(self):
+        """A literal U+FEFF inside a string literal is invisible; an editor, a paste or a normalising tool can
+        drop it without a visible diff, and the BOM rule would then never fire."""
+        self.assertEqual(validate_skill.BOM, chr(0xFEFF))
+        for path in (Path(validate_skill.__file__), Path(__file__)):
+            self.assertNotIn(chr(0xFEFF), path.read_text(encoding="utf-8"), f"{path.name} holds a literal BOM")
+
+    def test_the_docs_say_what_the_code_does_and_git_ignores_what_the_docs_produce(self):
+        import fnmatch
+        skill_md = (REPO / "sc2" / "SKILL.md").read_text(encoding="utf-8")
+        readme = (REPO / "README.md").read_text(encoding="utf-8")
+        self.assertIn("package_dual.py <skill-folder> --version <X.Y> [--output <dir>] [--deploy <skills-home>] [--strict]", skill_md)
+        self.assertIn("a changelog at the root included", skill_md)  # the missing-reference check reads every shipped text file
+        for doc, name in ((skill_md, "SKILL.md"), (readme, "README.md")):
+            self.assertIn("`.sh`, `.bash`, `.zsh`, `.py`, or no suffix", doc, name)
+            self.assertIn("`.pytest_cache`", doc, name)
+            self.assertIn("`.pyc`", doc, name)
+            self.assertIn("with and without PyYAML for the shapes a SKILL.md uses", doc, name)
+        self.assertIn("icacls", readme)  # the ACL deny two tests set and lift, and how to lift it after a killed run
+        patterns = (REPO / ".gitignore").read_text(encoding="utf-8").split()
+        for produced in ("sc2.skill", "sc2-v1.4.zip", "sc2-v2.0-rc1.zip"):
+            self.assertTrue(any(fnmatch.fnmatch(produced, pat) for pat in patterns), f"{produced} is not ignored")
+        self.assertIn("dist/", patterns)
 
 
 if __name__ == "__main__":

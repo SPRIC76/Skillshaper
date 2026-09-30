@@ -35,12 +35,25 @@ referenced name holding a space (or %20) is resolved; the BOM rule decides by wh
 not called unrunnable; every text type the packager rewrites, at every level of the skill, is read
 (root-level LICENSE and README.md included; a non-UTF-8 file outside references/, scripts/ and assets/
 is a warning); .PY is compiled.
+Updated: 2026-09-30 14:46 ET — v1.8: the built-in frontmatter reader reads what PyYAML reads for the shapes a SKILL.md
+uses (YAML's own quote escapes, a comment after a closing bracket, values continued on indented lines, > and |
+with - and +, block lists, nested and indented mappings, and null, boolean, number and date values typed as
+PyYAML types them, yEs a string), refuses what PyYAML refuses (a tab in a plain value, text after a closing
+quote, an unknown escape) and refuses by name what it does not take (an anchor, alias or tag, a nested flow
+collection, a list of mappings, a complex key); a description that is not text is named as a boolean, number
+or date; a null name is no name; the BOM is the name BOM, never an invisible literal.
 
 Errors are what claude.ai or the Skills API would reject, or what leaves the
 skill broken: frontmatter keys and limits (and frontmatter that is not valid YAML,
-read alike with and without PyYAML), a name that differs from its folder,
+read the same with and without PyYAML for the shapes a SKILL.md uses - quoted values with
+YAML's own escapes, comments, values continued on indented lines, > and | blocks, lists,
+a nested mapping, and null, boolean, number and date values typed as PyYAML types them;
+a shape PyYAML reads that the built-in reader does not - an anchor, alias or tag, a
+nested flow collection, a list of mappings, a complex key - is refused by name with the
+way to write it), a name that differs from its folder, a description that is not text,
 angle brackets in the description, a body over 500 lines, a referenced file that
-does not exist or is a dotfile the package leaves out (bare or ./-prefixed; test files - *_selftest.py, test_*.py,
+does not exist or is a dotfile the package leaves out (bare or ./-prefixed, in SKILL.md and in
+every other text file the package ships; test files - *_selftest.py, test_*.py,
 *_test.py, anything under tests/ - name throwaway fixtures and are exempt),
 a bundled Python script that does not compile, a bundled file (references/, scripts/, assets/)
 that is not UTF-8 (a script that starts with #! and holds a NUL byte carries a binary payload,
@@ -95,7 +108,21 @@ TEXT_SUFFIXES = {".md", ".markdown", ".mdx", ".rst", ".adoc", ".tex", ".bib", ".
 # (and of a file with no suffix); a shell also reads a BOM at the start of a .sh as part of the first command.
 RUN_SUFFIXES = {".sh", ".bash", ".zsh", ".py"}
 SHELL_SUFFIXES = {".sh", ".bash", ".zsh"}
-YAML_BOOLS = {"true": True, "false": False, "yes": True, "no": False, "on": True, "off": False}  # YAML 1.1, as PyYAML reads them
+BOM = "\ufeff"  # named, never a literal: an editor or a paste can drop the invisible character without a visible diff
+# How PyYAML (YAML 1.1) types a plain scalar, so the built-in reader agrees: booleans in exactly three
+# spellings (yEs is text), nulls, and its own int, float and timestamp patterns (2026.09.30 and 1e3 are text).
+YAML_BOOLS = {w: v for words, v in ((("yes", "true", "on"), True), (("no", "false", "off"), False))
+              for word in words for w in (word, word.capitalize(), word.upper())}
+YAML_NULLS = {"", "~", "null", "Null", "NULL"}
+YAML_INT = re.compile(r"[-+]?(?:0b[0-1_]+|0[0-7_]+|(?:0|[1-9][0-9_]*)|0x[0-9a-fA-F_]+|[1-9][0-9_]*(?::[0-5]?[0-9])+)")
+YAML_FLOAT = re.compile(r"[-+]?(?:[0-9][0-9_]*\.[0-9_]*(?:[eE][-+][0-9]+)?|[0-9][0-9_]*(?::[0-5]?[0-9])+\.[0-9_]*"
+                        r"|\.(?:inf|Inf|INF))|\.[0-9][0-9_]*(?:[eE][-+][0-9]+)?|\.(?:nan|NaN|NAN)")
+YAML_TIMESTAMP = re.compile(r"([0-9]{4})-([0-9]{1,2})-([0-9]{1,2})"
+                            r"(?:(?:[Tt]|[ \t]+)([0-9]{1,2}):([0-9]{2}):([0-9]{2})(?:\.[0-9]*)?"
+                            r"(?:[ \t]*(?:Z|[-+][0-9]{1,2}(?::[0-9]{2})?))?)?")
+YAML_ESCAPES = {"0": "\0", "a": "\a", "b": "\b", "t": "\t", "\t": "\t", "n": "\n", "v": "\v", "f": "\f", "r": "\r",
+                "e": "\x1b", " ": " ", '"': '"', "\\": "\\", "/": "/", "N": "\x85", "_": "\xa0", "L": " ",
+                "P": " "}
 # A bundled path, written bare or with a ./ prefix; ../ and foo/scripts/ stay out.
 REF_PATTERN = re.compile(r"(?<![\w/.-])(?:\./)?((?:references|scripts|assets)/[\w.\-/]*[\w])")
 WHEN_CUE = re.compile(r"\b(use (this skill )?(when|whenever|for|to)|trigger(s|ed)?|apply when|invoke when)\b", re.I)
@@ -134,63 +161,334 @@ def _parse_frontmatter(text):
     return data, body
 
 
+def _invalid(what):
+    return ValueError(f"frontmatter is not valid YAML: {what}")
+
+
+def _unsupported(key, shape, instead):
+    """A shape PyYAML reads that this reader does not: refused by name, with the way to write it."""
+    return ValueError(f"frontmatter uses {shape} in the value of {key}, which the built-in reader does not take; "
+                      f"{instead}, or install PyYAML (pip install pyyaml), which reads it")
+
+
+def _number(text):
+    """text as the int or float PyYAML resolves it to (YAML 1.1: 0x1f, 0o17 as 017, 1_000, 1:30, .inf), or None."""
+    if YAML_INT.fullmatch(text):
+        sign, body = (-1, text[1:]) if text[0] == "-" else (1, text.lstrip("+"))
+        body = body.replace("_", "")
+        if ":" in body:
+            return sign * sum(int(part) * 60 ** i for i, part in enumerate(reversed(body.split(":"))))
+        if body.startswith("0b"):
+            return sign * int(body[2:], 2)
+        if body.startswith("0x"):
+            return sign * int(body[2:], 16)
+        if len(body) > 1 and body[0] == "0":
+            return sign * int(body[1:], 8)
+        return sign * int(body)
+    if YAML_FLOAT.fullmatch(text):
+        body = text.replace("_", "").lower()
+        if body.endswith(".inf"):
+            return float("-inf") if body[0] == "-" else float("inf")
+        if body.endswith(".nan"):
+            return float("nan")
+        if ":" in body:
+            sign, body = (-1, body[1:]) if body[0] == "-" else (1, body.lstrip("+"))
+            whole, frac = body.rsplit(":", 1)
+            head = sum(int(part) * 60 ** i for i, part in enumerate(reversed(whole.split(":"))))
+            return sign * (head * 60 + float(frac))
+        return float(body)
+    return None
+
+
+def _resolve(text):
+    """A plain scalar as PyYAML types it: null, a YAML 1.1 boolean in its three spellings (yEs is text),
+    an int, a float, a date or datetime (2026-09-30), else the text itself."""
+    if text in YAML_NULLS:
+        return None
+    if text in YAML_BOOLS:
+        return YAML_BOOLS[text]
+    number = _number(text)
+    if number is not None:
+        return number
+    m = YAML_TIMESTAMP.fullmatch(text)
+    if m:
+        import datetime
+        y, mo, d = (int(x) for x in m.group(1, 2, 3))
+        try:
+            if m.group(4) is None:
+                return datetime.date(y, mo, d)
+            return datetime.datetime(y, mo, d, *(int(x) for x in m.group(4, 5, 6)))
+        except ValueError:
+            return text  # PyYAML raises on 2026-13-40 too, from the constructor; a string is the same verdict for a description
+    return text
+
+
+_MORE = object()  # a quoted or flow value that goes on past this line
+
+
+def _quoted(key, val):
+    """A single- or double-quoted scalar, as PyYAML reads it: '' is one quote inside single quotes, a backslash
+    escapes inside double quotes (an unknown escape is refused, as PyYAML refuses it), and only a comment may
+    follow the closing quote. (value, rest) or _MORE when the quote is not closed on this line."""
+    quote, i, out = val[0], 1, []
+    while i < len(val):
+        c = val[i]
+        if c == quote:
+            if quote == "'" and val[i + 1:i + 2] == "'":
+                out.append("'")
+                i += 2
+                continue
+            rest = val[i + 1:].strip()
+            if rest and not rest.startswith("#"):
+                raise _invalid(f"the value of {key} has text after its closing quote ({rest[:20]!r}); put it inside "
+                               "the quotes or drop them")
+            return "".join(out)
+        if c == "\\" and quote == '"':
+            nxt = val[i + 1:i + 2]
+            if nxt in YAML_ESCAPES:
+                out.append(YAML_ESCAPES[nxt])
+                i += 2
+                continue
+            if nxt in ("x", "u", "U"):
+                width = {"x": 2, "u": 4, "U": 8}[nxt]
+                digits = val[i + 2:i + 2 + width]
+                if len(digits) == width and all(d in "0123456789abcdefABCDEF" for d in digits):
+                    out.append(chr(int(digits, 16)))
+                    i += 2 + width
+                    continue
+            raise _invalid(f"the value of {key} holds the escape \\{nxt}, which YAML does not know; write \\\\ for a "
+                           "backslash, or use single quotes, where a backslash is plain text")
+        out.append(c)
+        i += 1
+    return _MORE
+
+
+def _flow_items(text):
+    """The top-level items of a flow collection's inside, split at commas outside quotes; a nested [ or {
+    is a ValueError for the caller to name."""
+    items, cur, quote, i = [], [], None, 0
+    while i < len(text):
+        c = text[i]
+        cur.append(c)
+        if quote:
+            if quote == '"' and c == "\\":  # the escape and what it escapes stay together for _quoted
+                cur.append(text[i + 1:i + 2])
+                i += 1
+            elif c == quote:
+                if quote == "'" and text[i + 1:i + 2] == "'":  # '' is one quote, not a close
+                    cur.append("'")
+                    i += 1
+                else:
+                    quote = None
+        elif c in ("'", '"') and not "".join(cur[:-1]).strip():
+            quote = c
+        elif c in "[{":
+            raise ValueError("nested")
+        elif c == ",":
+            items.append("".join(cur[:-1]).strip())
+            cur = []
+        i += 1
+    items.append("".join(cur).strip())
+    return [item for item in items if item]
+
+
+def _flow(key, val):
+    """A one-line [list] or {map} as PyYAML reads it, quoted items included, a comment allowed after the
+    close; _MORE when the close is on a later line; a nested collection is refused by name."""
+    opener, closer = val[0], {"[": "]", "{": "}"}[val[0]]
+    quote, depth, i = None, 1, 1
+    while i < len(val):
+        c = val[i]
+        if quote:
+            if c == "\\" and quote == '"':
+                i += 1
+            elif c == quote:
+                quote = None
+        elif c in ("'", '"'):
+            quote = c
+        elif c in "[{":
+            depth += 1
+        elif c in "]}" and depth > 1:
+            depth -= 1
+        elif c == closer:
+            rest = val[i + 1:].strip()
+            if rest and not rest.startswith("#"):
+                raise _invalid(f"the value of {key} has text after its closing {closer} ({rest[:20]!r}); put it inside "
+                               f"the brackets or drop them")
+            inside = val[1:i]
+            break
+        i += 1
+    else:
+        return _MORE
+    try:
+        items = _flow_items(inside)
+    except ValueError:
+        raise _unsupported(key, "a flow collection inside another ([a, [b]])", "write one flat list") from None
+    if opener == "[":
+        return [_scalar(key, item) for item in items]
+    result = {}
+    for item in items:
+        m = re.match(r"""^("[^"]*"|'[^']*'|[^\s:'"][^:]*?)\s*:(?:\s+(.*)|$)""", item)
+        if not m:
+            raise _invalid(f"the value of {key} holds {item[:20]!r} inside {{ }}, which is not a key: value pair")
+        result[m.group(1).strip("'\"")] = _scalar(key, (m.group(2) or "").strip())
+    return result
+
+
 def _scalar(key, val):
-    """One line's value as PyYAML reads it, so both parsers agree: a quoted string (a # after the closing
-    quote starts a comment), a plain scalar cut at ' #', yes/no/on/off/true/false as booleans, a one-line
-    [flow sequence] as a list; refused, as PyYAML refuses them, an unclosed quote or flow and an unquoted
-    ': ' (or a colon ending the value), which YAML reads as a second mapping key."""
+    """One line's value as PyYAML reads it, so both parsers agree: a quoted string (YAML's own escapes, a
+    comment after the closing quote), a plain scalar cut at ' #' and typed as PyYAML types it (null,
+    yes/no/on/off/true/false in their three spellings, numbers, dates), a one-line [list] or {map};
+    refused, as PyYAML refuses them, an unquoted ': ' (or a colon ending the value), which YAML reads as a
+    second mapping key, a tab inside a plain value, and an unknown escape; _MORE when a quote or a flow
+    is not closed on this line. An anchor, alias or tag is refused by name: this reader does not take them."""
     if val[:1] in ("'", '"'):
-        close = val.find(val[0], 1)
-        rest = val[close + 1:].strip() if close > 0 else "x"
-        if close < 0 or (rest and not rest.startswith("#")):
-            raise ValueError(f"frontmatter is not valid YAML: the value of {key} opens a quote it does not close")
-        return val[1:close]
+        return _quoted(key, val)
     if val[:1] in "[{":
-        if val[-1:] != {"[": "]", "{": "}"}[val[0]]:
-            raise ValueError(f"frontmatter is not valid YAML: the value of {key} opens a {val[0]} it does not close")
-        if val[0] == "[":
-            return [_scalar(key, x.strip()) for x in val[1:-1].split(",") if x.strip()]
-        return val
+        return _flow(key, val)
+    if val[:1] == "&":
+        raise _unsupported(key, "a YAML anchor (&)", "write the value plainly")
+    if val[:1] == "*":
+        raise _unsupported(key, "a YAML alias (*)", "write the value out in full")
+    if val[:1] == "!":
+        raise _unsupported(key, "a YAML tag (!)", "drop the tag")
     val = re.split(r"\s#", val, 1)[0].rstrip() if not val.startswith("#") else ""
+    if "\t" in val:
+        raise _invalid(f"the value of {key} holds a tab, which YAML does not take inside a plain value; use spaces "
+                       "or quote the value")
     if re.search(r": |:$", val):
-        raise ValueError(f"frontmatter is not valid YAML: the value of {key} holds an unquoted ': ', which YAML reads "
-                         f"as a second key; quote the value or write it as a > block")
-    return YAML_BOOLS[val.lower()] if val.lower() in YAML_BOOLS else val
+        raise _invalid(f"the value of {key} holds an unquoted ': ', which YAML reads as a second key; quote the "
+                       "value or write it as a > block")
+    return _resolve(val)
 
 
-def _mini_yaml(raw):
-    """Enough YAML for skill frontmatter: scalars, > and | blocks, one nested map; what PyYAML would refuse
-    (a tab after the key, no space after the colon, an unquoted ': ', an unclosed quote or flow) is a
-    ValueError, so a skill reads the same with and without it."""
-    data, lines, i = {}, raw.splitlines(), 0
+def _block_scalar(indicator, block):
+    """A > or | block's text as PyYAML folds and chomps it: a | keeps line breaks, a > joins lines with a
+    space (a blank line, or a more-indented line, keeps its break); - strips the trailing breaks, + keeps
+    them all, neither keeps one."""
+    lines = [line for line in block]
+    while lines and not lines[-1].strip():
+        lines.pop()
+    trailing = len(block) - len(lines)
+    if not lines:
+        return "\n" * trailing if "+" in indicator else ""
+    m = re.search(r"[1-9]", indicator)
+    indent = int(m.group()) if m else min(len(line) - len(line.lstrip(" ")) for line in lines if line.strip())
+    body = [line[indent:] if line.strip() else "" for line in lines]
+    if indicator[0] == "|":
+        text = "\n".join(body)
+    else:
+        text, prev_plain = "", False
+        for line in body:
+            plain = bool(line) and not line[0].isspace()
+            if not line:
+                text += "\n"
+            elif prev_plain and plain and text and not text.endswith("\n"):
+                text += " " + line
+            elif text and not text.endswith("\n"):
+                text += "\n" + line
+            else:
+                text += line
+            prev_plain = plain
+    if "-" in indicator:
+        return text
+    return text + "\n" * (1 + trailing if "+" in indicator else 1)
+
+
+def _mini_yaml(raw, _nested=False):
+    """Enough YAML for skill frontmatter, read as PyYAML reads it: plain, quoted and flow values on one line or
+    continued on indented lines, > and | blocks with their - and + chompers, a nested mapping, a block list
+    of scalars, and a mapping indented as a whole. What PyYAML would refuse (a tab after the key or in a plain
+    value, no space after the colon, an unquoted ': ', an unclosed quote or flow, text after a closing quote,
+    an unknown escape) is a ValueError, so a skill reads the same with and without it; what PyYAML reads
+    but this reader does not (an anchor, alias or tag, a nested flow collection, a list of mappings, a
+    complex key) is a ValueError naming the shape."""
+    lines = raw.splitlines()
+    if any(line[:1] == "\t" for line in lines):
+        raise _invalid("a line starts with a tab, which YAML does not take as indentation; use spaces")
+    indents = [len(line) - len(line.lstrip(" ")) for line in lines if line.strip() and not line.lstrip().startswith("#")]
+    if indents and min(indents) > 0:
+        lines = [line[min(indents):] if line.strip() else line for line in lines]
+    data, i = {}, 0
+
+    def continues(i):
+        """Does an indented line follow line i, blank lines between allowed?"""
+        while i < len(lines) and not lines[i].strip():
+            i += 1
+        return i < len(lines) and lines[i].startswith(" ")
+
+    def block_after(i):
+        """The lines below line i that belong to its key: indented, or blank and followed by indented."""
+        block = []
+        while continues(i):
+            block.append(lines[i])
+            i += 1
+        return block, i
+
     while i < len(lines):
         line = lines[i]
         if not line.strip() or line.lstrip().startswith("#"):
             i += 1
             continue
-        m = re.match(r"^([A-Za-z0-9_-]+):(\s*)(.*)$", line)
+        if line.startswith("? "):
+            raise _unsupported("this mapping", "a complex key (? )", "write the key plainly")
+        if line == "-" or line.startswith("- "):
+            raise _invalid("the frontmatter is a list (- item), not a mapping of name, description and the other keys")
+        m = re.match(r"""^("[^"]*"|'[^']*'|[A-Za-z0-9_][^:\t]*?)[ ]*:([ \t]*)(.*)$""", line)
         if not m:
             raise ValueError(f"Unparseable frontmatter line: {line!r}")
-        key, sep, val = m.group(1), m.group(2), m.group(3).strip()
+        key, sep, val = m.group(1).strip("'\""), m.group(2), m.group(3).strip()
         if "\t" in sep:
-            raise ValueError(f"frontmatter is not valid YAML: a tab after '{key}:' cannot start a value; use spaces")
+            raise _invalid(f"a tab after '{key}:' cannot start a value; use spaces")
         if val and not sep:
-            raise ValueError(f"frontmatter is not valid YAML: '{key}:{val[:1]}' needs a space after the colon")
+            raise _invalid(f"'{key}:{val[:1]}' needs a space after the colon")
         i += 1
-        if val in (">", ">-", "|", "|-", ""):
-            block = []
-            while i < len(lines) and (lines[i].startswith((" ", "\t")) or not lines[i].strip()):
-                block.append(lines[i])
-                i += 1
-            if val == "" and block and all(re.match(r"^\s+[A-Za-z0-9_-]+:", b) or not b.strip() for b in block):
-                data[key] = {bm.group(1): _scalar(bm.group(1), bm.group(2).strip())
-                             for b in block if (bm := re.match(r"^\s+([A-Za-z0-9_-]+):\s*(.*)$", b))}
-            elif val.startswith("|"):
-                data[key] = "\n".join(b.strip() for b in block).strip()
+        if re.fullmatch(r"[>|](?:[+-]?[1-9]?|[1-9]?[+-]?)", val):
+            block, i = block_after(i)
+            data[key] = _block_scalar(val, block)
+            continue
+        if val == "" or val.startswith("#"):
+            block, i = block_after(i)
+            if not block:
+                data[key] = None
+            elif block[0].lstrip() == "-" or block[0].lstrip().startswith("- "):
+                items = []
+                for b in block:
+                    if not b.strip():
+                        continue
+                    if not (b.lstrip() == "-" or b.lstrip().startswith("- ")):
+                        raise _unsupported(key, "a list item that goes on over more lines",
+                                           "write each item as one plain or quoted value after '- '")
+                    text = b.lstrip()[1:].strip()
+                    if text[:1] not in "'\"[{" and re.search(r": |:$", re.split(r"\s#", text, 1)[0]):
+                        raise _unsupported(key, "a list of mappings (- key: value)",
+                                           "write each item as one plain or quoted value after '- '")
+                    item = _scalar(key, text)
+                    if item is _MORE:
+                        raise _invalid(f"an item of {key} opens a quote or bracket it does not close on its line")
+                    items.append(item)
+                data[key] = items
             else:
-                data[key] = " ".join(b.strip() for b in block if b.strip())
-        else:
-            data[key] = _scalar(key, val)
+                data[key] = _mini_yaml("\n".join(block), _nested=True)
+            continue
+        # A value may go on over the following indented lines (a plain scalar, or a quote or flow closed
+        # later), folded as PyYAML folds it: a line break as one space, a blank line as a newline.
+        value, text, pending = _scalar(key, val), val, 0
+        while value is _MORE or (val[:1] not in "'\"[{" and continues(i)):
+            if i >= len(lines):
+                what = "a quote" if val[0] in "'\"" else f"a {val[0]}"
+                raise _invalid(f"the value of {key} opens {what} it does not close")
+            if not lines[i].strip():
+                pending += 1
+            elif lines[i].startswith(" "):
+                text += ("\n" * pending if pending else " ") + lines[i].strip()
+                pending = 0
+                value = _scalar(key, text)
+            else:  # a quote or flow still open when the next key begins: PyYAML reads on and fails too
+                what = "a quote" if val[0] in "'\"" else f"a {val[0]}"
+                raise _invalid(f"the value of {key} opens {what} it does not close")
+            i += 1
+        data[key] = value
     return data
 
 
@@ -336,7 +634,7 @@ def check(skill_dir, out=None):
     text = _read_utf8(md, "SKILL.md", errors)
     if text is None:
         return errors, warnings
-    if text.startswith("\ufeff"):
+    if text.startswith(BOM):
         text = text[1:]
         warnings.append("SKILL.md starts with a UTF-8 byte-order mark (BOM); save it as plain UTF-8, "
                         "which every surface reads")
@@ -349,7 +647,7 @@ def check(skill_dir, out=None):
     if extra:
         errors.append(f"frontmatter keys not allowed: {', '.join(sorted(extra))}")
 
-    name = str(fm.get("name", "")).strip()
+    name = "" if fm.get("name") is None else str(fm["name"]).strip()
     if not name:
         errors.append("frontmatter has no name")
     else:
@@ -359,7 +657,11 @@ def check(skill_dir, out=None):
             errors.append(f"name '{name}' differs from its folder '{skill.name}'; agents load by name")
 
     desc = fm.get("description")
-    if not isinstance(desc, str) or not desc.strip():
+    if desc is not None and not isinstance(desc, str):
+        kind = "a boolean" if isinstance(desc, bool) else "a number" if isinstance(desc, (int, float)) else "a date"
+        errors.append(f"description is {kind} ({desc}), not text: YAML reads it so unquoted; quote it")
+        desc = ""
+    elif not desc or not desc.strip():
         errors.append("frontmatter has no description")
         desc = ""
     desc = desc.strip()
@@ -449,14 +751,14 @@ def check(skill_dir, out=None):
         rel = p.relative_to(skill).as_posix()
         suffix = p.suffix.lower()
         run = suffix in RUN_SUFFIXES or not p.suffix
-        if source.startswith("﻿"):
+        if source.startswith(BOM):
             # A BOM breaks a file where the first bytes carry meaning: a shell or the kernel does not
             # honour a #! line that does not open the file (and the packager stores it without the
             # executable bit); a shell reads a BOM at the start of a .sh as part of the first command;
             # JSON forbids a BOM (json.loads rejects it). A .md or .ps1 is not run by its first line,
             # so a #! there is only text. Elsewhere it is a warning, except in a .ps1: Windows
             # PowerShell reads a UTF-8 script by its BOM and ANSI without one.
-            if run and source.startswith("﻿#!"):
+            if run and source.startswith(BOM + "#!"):
                 errors.append(f"{rel} has a UTF-8 byte-order mark (BOM) before its #! line, so a shell or the kernel "
                               f"does not honour it (Windows' py launcher aside) and it is not stored executable; save "
                               f"it as plain UTF-8")
@@ -474,7 +776,7 @@ def check(skill_dir, out=None):
                                 f"every surface reads")
         if suffix == ".py":
             try:
-                compile(source.lstrip("﻿"), str(p), "exec")
+                compile(source.lstrip(BOM), str(p), "exec")
             except (SyntaxError, ValueError) as e:  # a NUL byte is a ValueError on Python 3.10
                 errors.append(f"{rel} does not compile: {e}")
 
