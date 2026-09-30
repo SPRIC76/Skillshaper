@@ -7,6 +7,8 @@ unlistable folder, a double failure while landing; each failed before its fix.
 Updated: 2026-09-30 14:46 ET — EighthReview: a file dated outside what the zip format or localtime holds, named once for all
 such files; a skills home that takes no new folder, refused before anything is built; a --version that would name
 the .zip badly; each failed before its fix. The READONLY guard's docstring says it is a guard, not a failed-first test.
+Updated: 2026-09-30 15:37 ET — NinthReview: a skills home under a folder that takes no new folder, the probe asked once and named
+when it cannot be removed, a deploy failure's reason in words; the date lines' new form; each failed before its fix.
 
 Run from the repository root:
     python -B -m unittest discover -s tests -v
@@ -957,8 +959,8 @@ class SeventhReview(unittest.TestCase):
             with contextlib.redirect_stdout(printed):
                 rc = package_dual.main([str(skill), "--version", "1.0", "--output", str(out)])
             self.assertEqual(rc, 0, printed.getvalue())
-            self.assertRegex(printed.getvalue(), r"1 file is dated before the zip format's 1980 floor \(references/old\.md "
-                                                 r"\(19(69|70)-\d\d-\d\d\)\); its entry is dated 1980-01-01")
+            self.assertRegex(printed.getvalue(), r"1 file is dated before the zip format's 1980 floor: references/old\.md "
+                                                 r"dated (19(69|70)-\d\d-\d\d|before 1970); its entry is dated 1980-01-01")
             with zipfile.ZipFile(out / "good-skill.skill") as zf:
                 self.assertEqual(zf.getinfo("good-skill/references/old.md").date_time, (1980, 1, 1, 0, 0, 0))
                 self.assertEqual(zf.read("good-skill/references/old.md"), b"old\n")
@@ -1071,11 +1073,14 @@ class EighthReview(unittest.TestCase):
             self.assertNotIn("could not be read", text)
             self.assertEqual(text.count("1980 floor"), 1, text)
             self.assertEqual(text.count("2107 ceiling"), 1, text)
-            self.assertRegex(text, r"7 files are dated before the zip format's 1980 floor \(references/f0\.md \(19(69|70)-\d\d-\d\d\), "
-                                   r"references/f1\.md \(19(69|70)-\d\d-\d\d\), references/f2\.md \(19(69|70)-\d\d-\d\d\) and 4 more\); "
+            early = r"dated (19(69|70)-\d\d-\d\d|before 1970)"
+            self.assertRegex(text, rf"7 files are dated before the zip format's 1980 floor: references/f0\.md {early}, "
+                                   rf"references/f1\.md {early}, references/f2\.md {early} and 4 more; "
                                    r"their entries are dated 1980-01-01")
-            self.assertRegex(text, r"2 files are dated past the zip format's 2107 ceiling \(references/y2200\.md \(2(199|200)-\d\d-\d\d\), "
-                                   r"references/y5000\.md(?: \(5000-\d\d-\d\d\))?\); their entries are dated 2107-12-31")
+            self.assertRegex(text, r"2 files are dated past the zip format's 2107 ceiling: references/y2200\.md dated 2(199|200)-\d\d-\d\d, "
+                                   r"references/y5000\.md dated (5000-\d\d-\d\d|past about 3000); their entries are dated 2107-12-31")
+            for line in (line for line in text.splitlines() if " dated " in line):
+                self.assertNotIn("(", line)  # N10: no parentheses inside parentheses
             with zipfile.ZipFile(out / "good-skill.skill") as zf:
                 for rel in ("references/neg.md", "references/y1950.md", "references/f0.md"):
                     self.assertEqual(zf.getinfo(f"good-skill/{rel}").date_time, (1980, 1, 1, 0, 0, 0), rel)
@@ -1220,6 +1225,108 @@ class Archive(unittest.TestCase):
             target = package_dual.deploy(archive, "good-skill", Path(tmp) / "home")
             self.assertNotIn(b"\r\n", (target / "SKILL.md").read_bytes())
             self.assertNotIn(b"\r\n", (target / "scripts" / "run.py").read_bytes())
+
+
+
+class NinthReview(unittest.TestCase):
+    """The ninth review (48c4bed): a skills home not made yet under a folder that takes no new folder, refused
+    before anything is built; the probe asked once and, if it cannot be removed, named; the reason a deploy
+    failed said in words, never as an [Errno] or [WinError] repr."""
+
+    def _deploy(self, skill, out, home):
+        printed = io.StringIO()
+        with contextlib.redirect_stdout(printed):
+            rc = package_dual.main([str(skill), "--version", "1.0", "--output", str(out), "--deploy", str(home)])
+        return rc, printed.getvalue()
+
+    def test_a_skills_home_under_a_folder_that_takes_no_new_folder_is_refused_before_anything_is_built(self):
+        """N9: the home is absent and its parent denies new folders; before the fix both archives were built
+        and the deploy then failed on mkdir."""
+        with tempfile.TemporaryDirectory() as tmp:
+            skill = make_skill(Path(tmp) / "src")
+            parent = Path(tmp) / "locked"
+            parent.mkdir()
+            home = parent / "skills"
+            out = Path(tmp) / "out"
+            with no_new_folders(parent):
+                rc, text = self._deploy(skill, out, home)
+                left = sorted(p.name for p in parent.iterdir())
+            self.assertEqual(rc, 1, text)
+            self.assertRegex(text, rf"Deploy refused: {re.escape(str(home))} could not be made: {re.escape(str(parent))} "
+                                   r"takes no new folder from this user \([^()]+\); ")
+            self.assertNotIn("[WinError", text)
+            self.assertNotIn("[Errno", text)
+            self.assertFalse(out.exists())
+            self.assertFalse(home.exists())
+            self.assertEqual(left, [], left)  # no probe folder left behind
+
+    def test_the_skills_home_is_probed_once(self):
+        """N10: main() probes before building; deploy() does not probe again."""
+        calls = []
+        real = package_dual._fresh
+
+        def counting(folder, prefix, suffix, directory=False):
+            calls.append(prefix)
+            return real(folder, prefix, suffix, directory=directory)
+        with tempfile.TemporaryDirectory() as tmp:
+            skill = make_skill(Path(tmp) / "src")
+            home = Path(tmp) / "home"
+            home.mkdir()
+            package_dual._fresh = counting
+            try:
+                rc, text = self._deploy(skill, Path(tmp) / "out", home)
+            finally:
+                package_dual._fresh = real
+            self.assertEqual(rc, 0, text)
+            self.assertEqual(calls.count(".probe-"), 1, calls)
+            self.assertEqual(sorted(p.name for p in home.iterdir()), ["good-skill"])
+
+    def test_a_probe_folder_that_cannot_be_removed_is_named(self):
+        """N10: the probe was removed with its failure swallowed, leaving an unnamed .probe-* folder."""
+        real = Path.rmdir
+
+        def stuck(self):
+            if self.name.startswith(".probe-"):
+                raise PermissionError(13, "Access is denied", str(self))
+            return real(self)
+        with tempfile.TemporaryDirectory() as tmp:
+            skill = make_skill(Path(tmp) / "src")
+            home = Path(tmp) / "home"
+            home.mkdir()
+            Path.rmdir = stuck
+            try:
+                rc, text = self._deploy(skill, Path(tmp) / "out", home)
+            finally:
+                Path.rmdir = real
+            probes = [p for p in home.iterdir() if p.name.startswith(".probe-")]
+            self.assertEqual(rc, 0, text)
+            self.assertEqual(len(probes), 1, probes)
+            self.assertIn(f"{probes[0]} is an empty folder this run made to test the skills home and could not "
+                          "remove (Access is denied); delete it", text)
+
+    def test_why_a_deploy_step_failed_is_said_in_words(self):
+        """N10: three messages printed the exception itself, "[WinError 5] Access is denied: '...'"."""
+        real = package_dual._remove
+
+        def refusing(path):
+            if Path(path).name.startswith(".old-"):
+                raise PermissionError(13, "Access is denied", str(path))
+            return real(path)
+        with tempfile.TemporaryDirectory() as tmp:
+            skill = make_skill(Path(tmp) / "src")
+            home = Path(tmp) / "home"
+            home.mkdir()
+            rc, text = self._deploy(skill, Path(tmp) / "out", home)
+            self.assertEqual(rc, 0, text)
+            package_dual._remove = refusing
+            try:
+                rc, text = self._deploy(skill, Path(tmp) / "out2", home)
+            finally:
+                package_dual._remove = real
+            self.assertEqual(rc, 0, text)
+            self.assertIn("Deployed, but the old copy could not be removed (Access is denied); delete ", text)
+            self.assertNotIn("[Errno", text)
+            self.assertNotIn("[WinError", text)
 
 
 if __name__ == "__main__":

@@ -7,6 +7,11 @@ failed before its fix.
 Updated: 2026-09-30 14:46 ET — EighthReview: the frontmatter parity table (every verdict recorded from PyYAML 6.0.3, run through
 the built-in reader always and through PyYAML where installed), the shapes the built-in reader refuses by name, the
 BOM as a name, and the docs and .gitignore against the code; each failed before its fix.
+Updated: 2026-09-30 15:37 ET — NinthReview: the seeded differential test (the fixed tables plus 3,000 generated frontmatters,
+each PyYAML's value and type or a refusal by name, never a crash), the ninth review's shapes recorded from PyYAML
+6.0.3, the shapes outside the subset refused by name, linear time without recursion, typed keys and list or mapping
+descriptions named, no invisible literal character in any script or test, and the docs' subset; each failed before
+its fix. The depth-2 nested mapping moved from EighthReview.PARITY to NinthReview.UNSUPPORTED.
 
 Run from the repository root:
     python -B -m unittest discover -s tests -v
@@ -680,7 +685,6 @@ class EighthReview(unittest.TestCase):
         ("block-list-quoted", "allowed-tools:\n  - \"Read\"\n  - 'Write'", ("text", "allowed-tools", ["Read", "Write"])),
         ("block-list-one-space", "allowed-tools:\n - Read\n - Write", ("text", "allowed-tools", ["Read", "Write"])),
         ("flow-map", 'metadata: {version: "1.4", note: plain}', ("text", "metadata", {"version": "1.4", "note": "plain"})),
-        ("nested-map", 'metadata:\n  version: "1.4"\n  nested:\n    deep: 1', ("text", "metadata", {"version": "1.4", "nested": {"deep": 1}})),
         ("nested-map-one-space", 'metadata:\n version: "1.4"', ("text", "metadata", {"version": "1.4"})),
         ("hex", "metadata: {n: 0x1f, o: 017, b: 0b11, u: 1_000, s: 1:30, f: .5, e: 1e3}",
          ("text", "metadata", {"n": 31, "o": 15, "b": 3, "u": 1000, "s": 90, "f": 0.5, "e": "1e3"})),
@@ -719,9 +723,9 @@ class EighthReview(unittest.TestCase):
                    ("complex-key", "? description\n: Use when asked", "complex key"),
                    ("list-of-maps", "allowed-tools:\n  - name: Read", "list of mappings")]
 
-    def _parity(self, builtin, crlf=False):
+    def _parity(self, builtin, crlf=False, table=None):
         with tempfile.TemporaryDirectory() as tmp:
-            for label, line, verdict in self.PARITY:
+            for label, line, verdict in (self.PARITY if table is None else table):
                 with self.subTest(label + (" crlf" if crlf else "")):
                     head = " name: good-skill\n" if label == "one-space-indent" else "name: good-skill\n"
                     if verdict[0] in ("text", "none") and verdict[1] != "description":
@@ -808,12 +812,437 @@ class EighthReview(unittest.TestCase):
             self.assertIn("`.sh`, `.bash`, `.zsh`, `.py`, or no suffix", doc, name)
             self.assertIn("`.pytest_cache`", doc, name)
             self.assertIn("`.pyc`", doc, name)
-            self.assertIn("with and without PyYAML for the shapes a SKILL.md uses", doc, name)
-        self.assertIn("icacls", readme)  # the ACL deny two tests set and lift, and how to lift it after a killed run
+            self.assertIn("reads this subset of YAML and refuses the rest by name", doc, name)
+        self.assertIn("icacls", readme)  # the ACL deny several tests set and lift, and how to lift it after a killed run
         patterns = (REPO / ".gitignore").read_text(encoding="utf-8").split()
         for produced in ("sc2.skill", "sc2-v1.4.zip", "sc2-v2.0-rc1.zip"):
             self.assertTrue(any(fnmatch.fnmatch(produced, pat) for pat in patterns), f"{produced} is not ignored")
         self.assertIn("dist/", patterns)
+
+
+# -- The ninth review (48c4bed): the built-in reader reads a named subset and refuses the rest ------------------------
+
+BS = chr(92)  # a backslash, built rather than typed, so no escape in this file can decode into a literal
+SEED = 20260930
+GENERATED = 3000
+
+
+def _frontmatter_fragments():
+    """The grammar the differential corpus is built from, as (usual, hostile) pairs: every shape in the ninth
+    review and the recorded tables, and the characters and layouts that broke earlier readers."""
+    e_acute, emoji = chr(0xE9), chr(0x1F600)
+    keys = (["name", "description", "license", "allowed-tools", "metadata", "compatibility", "description", "_under"],
+            ["on", "yes", "Off", "1", "017", "1_0", "~", "null", "2026-09-30", "2026-13-40", "0x_", '"description"',
+             "'metadata'", '"na' + BS + 'u006De"', "'it''s'", "allowed tools", "-name", "<<", "n" + e_acute + "me",
+             "a" * 130, "x.y"])
+    plains = (["Use when asked.", "good-skill", "a", "a  b", "Use when asked   ", "yes", "No", "ON", "yEs", "true", "~",
+               "null", "Null", "0", "-0", "1", "-1", "+1", "12", "017", "019", "08", "0x1f", "0b101", "0_", "1_000",
+               "1:30", "1:60", "1:30.5", "1.4", "-0.0", "1.", ".5", "1e3", "1.0e+3", "1.0e3", ".inf", "-.inf", "+.INF",
+               ".NaN", "2026-09-30", "2026-9-30", "2026.09.30", "a:b", "a :b", "http://x.y/z#frag", "C#", "a #c", "a#b",
+               "R&D", "a * b", "Use it!", "a | b", "a > b", "use [x] when", "use {x} when", "it's", 'say "hi"',
+               "caf" + e_acute, emoji + " Use when", "-x", "--", "9" * 30, "0o17", "0x1F_ff", "-0b1_0", "+0_7", "~x"],
+              ["0x_", "0b_", "2026-13-40", "2026-02-30", "2026-09-30 10:00:00", "2026-09-30T10:00:00Z",
+               "2026-09-30t10:00:00.5+02:00", "=", "<<", "Use when: asked", "Use when asked:", "a : b", "a # c: d",
+               "- x", "-", "--- x", "...", "? x", "?x", "?", ":x", ": x", ",x", "]x", "}x", "`code` span", "@at",
+               "%pct", "&anchor x", "*alias", "!tag x", "!!str 1", "|x", ">x", "|", ">", "#c", "1" * 5000, "-.nan"])
+    quoted = (["'a'", "'it''s'", "''", "''''", "'a' # c", "'C:" + BS + "path'", "'a" + BS + "'", '"a"', '""',
+               '"a' + BS + '"b"', '"a' + BS + BS + 'b"', '"' + BS + 't"', '"' + BS + 'u00e9"', '"' + BS + 'x41"',
+               '"' + BS + 'U0001F600"', '"' + BS + 'L' + BS + 'P' + BS + 'N' + BS + '_"', '"' + BS + '/"',
+               '"' + BS + ' x"', '"' + BS + '0"', '"' + BS + 'e"', '"a # b"', '"a" #c', '"say ' + BS + '"hi' + BS + '""',
+               "'a\n{I}b'", '"a\n{I}b"', '"a' + BS + '\n{I}b"', "'a\n\n{I}b'", '"a\n{I}\n{I}b"',
+               "'a\n{I}# not a comment\n{I}b'", '"' + BS + 'ud800"'],
+              ["'a' b", "'a'#c", "'a': b", "'unclosed", '"' + BS + 'xZZ"', '"' + BS + 'q"', '"' + BS + 'U00110000"',
+               '"' + BS + 'u12"', '"a" b', '"a":b', '"a"#c', '"unclosed', "'it's'", "'a\nb'", '"a\n{I}b" c',
+               "'a\n{I}b'x"])
+    flows = (["[]", "[ ]", "[a]", "[a, b]", "[a, b,]", "[a b]", "[a:b]", "[a :b]", "[a#b, c]", "[a,\n{I}b]", "[a\n{I}b]",
+              "[-]", "[-1, -x]", "[don't, stop]", "['a, b', c]", '["a' + BS + '"b", c]', "['it''s', c]",
+              "[Bash(git log:*), Read]", "[Bash(git:*), Read]", "[a] # c", "[yes, 1, ~, 1.5, 2026-09-30, .nan]",
+              "['a',\n{I}'b']", "{}", "{a: 1}", "{a: }", "{a:}", '{"a:b": 1}', "{home: http://x.y}", "{a: 1,\n{I}b: 2}",
+              "{1: a, yes: b, null: c}", "{a: 1, a: 2}", "{a: 1,}", "{'a': 'b'}", "{a: 2026-09-30, b: 0x1f}"],
+             ["[a,,b]", "[,a]", "[,]", "[a: b]", "[a #b, c]", "[a,  # c\n{I}b]", "[[a]]", "[a, [b]]", "[{a: 1}]",
+              "[- a]", "[?a]", "[a?b]", "[:a]", "[a] b", "[a]#c", "[a", "[a,\n{I}b", "[a}", "[0x_]", "[|a]", "[%a]",
+              "[@a]", "[`a`]", "[&a b]", "[*a]", "[!a b]", '["a" b]', "{a}", "{a:1}", "{a: b: c}", "{: b}", "{a: [b]}",
+              "{,}", "{a: 1 b: 2}", "{a\n{I}: b}", "{a: 'x", "{a: 1", "{? a: b}", "{a: 1] ", "{a: #c\n{I}1}"])
+    headers = ([">", "|", ">-", "|-", ">+", "|+", ">2", "|1", ">2-", ">-2", "|+3", "> # c", "|- # c", ">  ", "| #"],
+               [">#c", "> x", "|0", ">+-", "|10"])
+    words = (["Use when", "asked.", "a", "# not a comment", "- x", "'q'", "tail  ", "", "  indented"], ["b: c"])
+    specials = ["\t", chr(0x2028), chr(0x2029), chr(0x85), chr(0xFEFF), chr(0x7F), chr(0), "\r", chr(12), ":", " ",
+                "#", "-", "'", '"', BS, "[", "]", "{", "}", ",", "&", "*", "!", "|", ">", "%", "@", "`", "?", e_acute,
+                "\n", "\n  ", "\n- ", ": ", " #", "---", "...", emoji, chr(0xA0), chr(0xFFFE)]
+    return {"keys": keys, "plains": plains, "quoted": quoted, "flows": flows, "headers": headers, "words": words,
+            "specials": specials}
+
+
+def _pick(rng, pair, usual=0.9):
+    """Mostly a usual fragment, sometimes any, hostile ones included."""
+    return rng.choice(pair[0]) if rng.random() < usual or not pair[1] else rng.choice(pair[0] + pair[1])
+
+
+def _generate(rng, fr, depth=0, indent=0):
+    """One mapping entry (a list of lines) at the given indent."""
+    pad = " " * indent
+    key = _pick(rng, fr["keys"], 0.85)
+    sep = rng.choice([" "] * 20 + ["  ", "", "\t"])
+    kind = rng.choice(["plain"] * 3 + ["quoted"] * 2 + ["flow"] * 2 + ["block"] * 2 + ["list"] * 3 +
+                      ["nested"] * (2 if depth < 2 else 0) + ["empty", "below", "below"])
+
+    def cont():
+        return pad + " " * rng.choice([0, 1, 2, 2, 2, 2, 2, 2, 4, 4])
+
+    if kind in ("plain", "quoted", "flow"):
+        value = _pick(rng, fr["plains" if kind == "plain" else kind if kind == "quoted" else "flows"])
+        lines = f"{pad}{key}:{sep}{value}".replace("{I}", cont()).split("\n")
+        if kind == "plain" and rng.random() < 0.35:
+            for _ in range(rng.randint(1, 3)):
+                lines.append(rng.choice(["", cont() + _pick(rng, fr["plains"]), cont() + _pick(rng, fr["words"]),
+                                         cont() + "# c"]))
+        return lines
+    if kind == "block":
+        lines = [f"{pad}{key}:{sep}{_pick(rng, fr['headers'])}"]
+        for _ in range(rng.randint(0, 4)):
+            lines.append(rng.choice(["", pad + rng.choice(["  "] * 8 + ["    ", " ", "   ", ""])
+                                     + _pick(rng, fr["words"])]))
+        return lines
+    if kind == "list":
+        lines = [f"{pad}{key}:" + rng.choice(["", "", " # c"])]
+        at = pad + " " * rng.choice([0, 0, 1, 2, 2, 4])
+        for _ in range(rng.randint(1, 3)):
+            item = rng.choice(["- " + _pick(rng, fr["plains"])] * 12 + ["- " + _pick(rng, fr["quoted"]).replace("{I}", cont())] * 6
+                              + ["-", "- # c", "- - x", "- a: b", "- [a, b]", "- {a: 1}", "- |", "-x"])
+            lines.extend((at + item).split("\n"))
+            if rng.random() < 0.2:
+                lines.append(rng.choice(["", at + "# c", at + "  more", pad + "  # c", at[:-1] + "- off"]))
+        return lines
+    if kind == "nested":
+        lines = [f"{pad}{key}:" + rng.choice(["", "", " # c"])]
+        inner = indent + rng.choice([1, 2, 2, 4])
+        for _ in range(rng.randint(1, 3)):
+            lines.extend(_generate(rng, fr, depth + 1, inner))
+        return lines
+    if kind == "empty":
+        return [f"{pad}{key}:" + rng.choice(["", " ", " # c", "  #c"])]
+    value = (_pick(rng, fr["plains"]) if rng.random() < 0.6 else _pick(rng, fr["quoted"])).replace("{I}", cont())
+    return [f"{pad}{key}:", *(cont() + value).split("\n")]
+
+
+def frontmatter_corpus(count=GENERATED, seed=SEED):
+    """The fixed shapes, then count frontmatters built by a seeded generator (the same list on every run):
+    one to four entries, then mutations - a comment or blank line, an indent shifted, a line doubled, a
+    special character inserted or one deleted, a document marker, the whole mapping indented, CRLF."""
+    import random
+    rng = random.Random(seed)
+    fr = _frontmatter_fragments()
+    corpus = [line for _, line, _ in EighthReview.PARITY] + [line for _, line, _ in EighthReview.UNSUPPORTED]
+    corpus += [line for _, line, _ in NinthReview.TABLE] + [line for _, line, _ in NinthReview.UNSUPPORTED]
+    fixed = len(corpus)
+    while len(corpus) < fixed + count:
+        lines = []
+        for _ in range(rng.randint(1, 4)):
+            lines.extend(_generate(rng, fr))
+        for _ in range(rng.choice([0, 0, 0, 0, 0, 1, 1, 1, 2, 3])):
+            what = rng.randrange(8)
+            at = rng.randrange(len(lines))
+            if what == 0:
+                lines.insert(at, " " * rng.choice([0, 1, 2, 4]) + "# note")
+            elif what == 1:
+                lines.insert(at, rng.choice(["", "  "]))
+            elif what == 2:
+                shift = rng.choice([-2, -1, 1, 2])
+                lines[at] = lines[at][-shift:] if shift < 0 and lines[at][:-shift].strip() == "" else " " * max(shift, 0) + lines[at]
+            elif what == 3:
+                lines.insert(at, lines[at])
+            elif what in (4, 5):
+                line = lines[at]
+                cut = rng.randint(0, len(line))
+                lines[at] = line[:cut] + rng.choice(fr["specials"]) + line[cut:]
+            elif what == 6 and lines[at]:
+                cut = rng.randrange(len(lines[at]))
+                lines[at] = lines[at][:cut] + lines[at][cut + 1:]
+            else:
+                lines.insert(at, rng.choice(["...", "--- x", "---x", "... x"]))
+        if rng.random() < 0.05:
+            lines = [" " + line for line in lines]
+        raw = "\n".join(lines) + ("\n" if rng.random() < 0.5 else "")
+        if rng.random() < 0.08:
+            raw = raw.replace("\n", "\r\n")
+        corpus.append(raw)
+    return corpus
+
+
+def _same(a, b):
+    """Equal in type and value, all the way down (True is not 1, a date is not a datetime, NaN is NaN)."""
+    import math
+    if type(a) is not type(b):
+        return False
+    if isinstance(a, float):
+        return (math.isnan(a) and math.isnan(b)) or (a == b and math.copysign(1, a) == math.copysign(1, b))
+    if isinstance(a, list):
+        return len(a) == len(b) and all(_same(x, y) for x, y in zip(a, b))
+    if isinstance(a, dict):
+        return len(a) == len(b) and all(_same(k1, k2) and _same(v1, v2)
+                                        for (k1, v1), (k2, v2) in zip(a.items(), b.items()))
+    return a == b
+
+
+def _builtin_outcome(raw):
+    """("ok", value), ("refused", message) for a ValueError naming the frontmatter, or ("crash", what)."""
+    try:
+        return "ok", validate_skill._mini_yaml(raw)
+    except ValueError as e:
+        if str(e).startswith("frontmatter"):
+            return "refused", str(e)
+        return "crash", f"ValueError not named: {e}"
+    except Exception as e:  # noqa: BLE001 - any other exception is the defect this test exists to catch
+        return "crash", f"{type(e).__name__}: {e}"
+
+
+def differential(corpus):
+    """Each case's verdict against PyYAML 6: agree, refused (by name), or bad (a crash, accepting what PyYAML
+    refuses, or a different value). Returns (counts, bad cases)."""
+    import yaml
+    counts, bad = {"agree": 0, "refused": 0, "refused-both": 0, "bad": 0}, []
+    for raw in corpus:
+        mine = _builtin_outcome(raw)
+        try:
+            theirs = ("ok", yaml.safe_load(raw))
+        except Exception as e:  # noqa: BLE001 - PyYAML refusing, for whatever reason, is a refusal
+            theirs = ("refused", f"{type(e).__name__}: {e}")
+        if mine[0] == "crash":
+            verdict = "bad"
+        elif mine[0] == "refused":
+            verdict = "refused"
+            if theirs[0] == "refused":
+                counts["refused-both"] += 1
+        elif theirs[0] == "ok" and _same(mine[1], theirs[1]):
+            verdict = "agree"
+        else:
+            verdict = "bad"
+        counts[verdict] += 1
+        if verdict == "bad":
+            bad.append((raw, mine, theirs))
+    return counts, bad
+
+
+class NinthReview(unittest.TestCase):
+    """The ninth review (48c4bed): the built-in reader reads a small, named subset of YAML and refuses the rest by
+    name; for any input it returns exactly what PyYAML returns, or refuses; it runs in linear time without
+    recursion; a key or description YAML types is named; no invisible literal character in the scripts."""
+
+    # Every verdict recorded from PyYAML 6.0.3 on 2026-09-30, in EighthReview.PARITY's form.
+    TABLE = [
+        ("n1-empty-item", "allowed-tools:\n  -\n  - Read", ("text", "allowed-tools", [None, "Read"])),
+        ("n1-empty-flow-value", "metadata: {version: }", ("text", "metadata", {"version": None})),
+        ("n2-indentless", "allowed-tools:\n- Read\n- Write", ("text", "allowed-tools", ["Read", "Write"])),
+        ("n2-indentless-then-key", "allowed-tools:\n- Read\nlicense: MIT", ("text", "allowed-tools", ["Read"])),
+        ("n2-nested-indentless", "metadata:\n  tags:\n  - a\n  - b\n  version: \"1\"",
+         ("text", "metadata", {"tags": ["a", "b"], "version": "1"})),
+        ("n2-nested-indented", "metadata:\n  tags:\n    - a", ("text", "metadata", {"tags": ["a"]})),
+        ("n2-comment-between", "allowed-tools:\n- Read\n# the writer\n- Write", ("text", "allowed-tools", ["Read", "Write"])),
+        ("n3-backtick", "description: `good-skill` does the thing. Use when asked.", ("error", "starts with `")),
+        ("n3-at", "description: @good-skill does the thing. Use when asked.", ("error", "starts with @")),
+        ("n3-percent", "description: %s is replaced. Use when asked.", ("error", "starts with %")),
+        ("n3-dash", "description: - Use when asked.", ("error", "starts with -")),
+        ("n3-comma", "description: , use when asked", ("error", "starts with ,")),
+        ("n3-bracket", "description: ]x", ("error", "starts with ]")),
+        ("n3-brace", "description: }x", ("error", "starts with }")),
+        ("n3-pipe", "description: |foo use when", ("error", "starts with |")),
+        ("n4-folded-comment", "description: > # folded below\n  Use when asked.", ("text", "description", "Use when asked.")),
+        ("n4-literal-comment", "description: |- # literal\n  Use when\n  asked.", ("text", "description", "Use when\nasked.")),
+        ("n5-escaped-break", 'description: "Use when\\\n  asked."', ("text", "description", "Use whenasked.")),
+        ("n5-apostrophe-in-flow", "allowed-tools: [don't, stop]", ("text", "allowed-tools", ["don't", "stop"])),
+        ("n5-colon-in-flow", "allowed-tools: [Bash(git log:*), Read]", ("text", "allowed-tools", ["Bash(git log:*)", "Read"])),
+        ("n5-date-one-digit", "description: Use when 2026-9-30", ("text", "description", "Use when 2026-9-30")),
+        ("n5-date-one-digit-typed", "metadata: {updated: 2026-9-30}", ("text", "metadata", {"updated": "2026-9-30"})),
+        ("n5-date-impossible", "description: 2026-13-40", ("error", "a date that does not exist")),
+        ("n5-0b", "description: 0b_", ("error", "cannot read as one")),
+        ("n5-0x", "description: 0x_", ("error", "cannot read as one")),
+        ("n5-double-comma", "allowed-tools: [a,,b]", ("error", "empty item")),
+        ("n5-keep-then-key", "description: |+\n  Use when asked.\n\nlicense: MIT",
+         ("text", "description", "Use when asked.\n\n")),
+        ("n5-less-indented", "description: >\n    Use when\n  asked.", ("error", "indented past the keys")),
+        ("n5-comment-then-text", "description: Use when\n  # c\n  asked.", ("error", "whose value has ended")),
+        ("n7-list", "description:\n  - Use when asked.", ("typed", "a list")),
+        ("n7-map", "description: {when: asked}", ("typed", "a mapping")),
+        ("below-plain", "description:\n  Use when\n  asked.", ("text", "description", "Use when asked.")),
+        ("below-quoted", "description:\n  'Use when asked.'", ("text", "description", "Use when asked.")),
+        ("value-equals", "description: =", ("error", "value key")),
+    ]
+    # What PyYAML reads that the built-in reader does not take: refused by name, with the way to write it.
+    UNSUPPORTED = [
+        ("nested-deep", 'metadata:\n  version: "1.4"\n  nested:\n    deep: 1', "a mapping inside a nested mapping"),
+        ("flow-comment", "allowed-tools: [Read,  # the reader\n  Write]", "a comment inside [ ]"),
+        ("flow-key-alone", "metadata: {a}", "a key without ': '"),
+        ("flow-key-no-space", "metadata: {a:1}", "a key without ': '"),
+        ("item-over-lines", "allowed-tools:\n  - 'Read\n    Write'", "an item that opens a quote"),
+        ("question-start", "description: ?foo", "a plain value that starts with ?"),
+        ("datetime", "description: 2026-09-30 10:00:00", "a date with a time"),
+        ("block-below", "description:\n  >\n    Use when asked.", "block that starts on the line below its key"),
+    ]
+    AGREE_FLOOR = 1000  # the generated corpus is hostile on purpose; most of the rest is refused by both readers
+
+    def test_the_built_in_reader_gives_the_recorded_pyyaml_verdict_on_the_ninth_review_shapes(self):
+        with without_pyyaml():
+            EighthReview._parity(self, builtin=True, table=self.TABLE)
+            EighthReview._parity(self, builtin=True, crlf=True, table=self.TABLE)
+
+    @unittest.skipUnless(_has_pyyaml(), "PyYAML is not installed here")
+    def test_pyyaml_gives_the_recorded_verdict_on_the_ninth_review_shapes(self):
+        EighthReview._parity(self, builtin=False, table=self.TABLE)
+        EighthReview._parity(self, builtin=False, crlf=True, table=self.TABLE)
+
+    def test_a_shape_outside_the_subset_is_refused_by_name(self):
+        with without_pyyaml():
+            for label, line, named in self.UNSUPPORTED:
+                with self.subTest(label):
+                    with self.assertRaises(ValueError) as cm:
+                        validate_skill._parse_frontmatter(f"---\nname: good-skill\n{line}\n---\n")
+                    message = str(cm.exception)
+                    self.assertTrue(message.startswith("frontmatter uses "), message)
+                    self.assertIn(named, message)
+                    self.assertIn("install PyYAML", message)
+
+    @unittest.skipUnless(_has_pyyaml(), "PyYAML is not installed here")
+    def test_pyyaml_reads_every_shape_the_built_in_reader_refuses_by_name(self):
+        for label, line, _ in self.UNSUPPORTED:
+            with self.subTest(label):
+                fm, _ = validate_skill._parse_frontmatter(f"---\nname: good-skill\n{line}\n---\n")
+                self.assertEqual(fm["name"], "good-skill")
+
+    @unittest.skipUnless(_has_pyyaml(), "PyYAML is not installed here")
+    def test_for_any_input_the_built_in_reader_returns_what_pyyaml_returns_or_refuses_by_name(self):
+        """The invariant, over the fixed tables and GENERATED seeded cases: never a crash, never a value PyYAML
+        refuses, never a different value or type."""
+        corpus = frontmatter_corpus()
+        counts, bad = differential(corpus)
+        shown = "\n".join(f"{raw!r}\n  built-in: {mine!r}\n  PyYAML:   {theirs!r}" for raw, mine, theirs in bad[:10])
+        self.assertEqual(bad, [], f"{len(bad)} case(s) broke the invariant:\n{shown}")
+        self.assertEqual(counts["agree"] + counts["refused"], len(corpus), counts)
+        self.assertGreaterEqual(counts["agree"], self.AGREE_FLOOR, counts)
+
+    def test_without_pyyaml_the_built_in_reader_never_crashes_or_hangs_on_the_corpus(self):
+        import time
+        corpus = frontmatter_corpus()
+        started = time.perf_counter()
+        with without_pyyaml():
+            outcomes = [(raw, _builtin_outcome(raw)) for raw in corpus]
+        self.assertLess(time.perf_counter() - started, 60)
+        crashes = [(raw, what) for raw, (kind, what) in outcomes if kind == "crash"]
+        self.assertEqual(crashes, [], crashes[:5])
+        self.assertTrue(any(kind == "ok" for _, (kind, _) in outcomes))
+
+    def test_the_corpus_is_the_same_on_every_run(self):
+        self.assertEqual(frontmatter_corpus(50), frontmatter_corpus(50))
+
+    def test_the_built_in_reader_runs_in_linear_time_without_recursion(self):
+        """N12: long values, long lines and deep nesting are read or refused by name, each well inside a second."""
+        import time
+        cases = {
+            "plain over 12,000 lines": ("description: a\n" + "  word\n" * 12000, "ok"),
+            "quoted over 6,000 lines": ('description: "a\n' + "  b\n" * 6000 + '  "\n', "ok"),
+            "flow list over 6,000 lines": ("allowed-tools: [a,\n" + "  b,\n" * 6000 + "  c]\n", "ok"),
+            "block list of 12,000 items": ("allowed-tools:\n" + "  - a\n" * 12000, "ok"),
+            "60,000 spaces after a key": ("description:" + " " * 60000 + "x\n", "ok"),
+            "unclosed quote over 5,000 lines": ('description: "a\n' + "  b\n" * 5000, "does not close"),
+            "mapping 400 deep": ("".join(" " * i + f"k{i}:\n" for i in range(400)), "a mapping inside a nested mapping"),
+            "flow 1,200 deep": ("allowed-tools: " + "[" * 1200 + "]" * 1200 + "\n", "inside another"),
+            "over the size cap": ("description: " + "a" * 100001 + "\n", "takes at most 100,000"),
+        }
+        with without_pyyaml():
+            for label, (raw, expect) in cases.items():
+                with self.subTest(label):
+                    started = time.perf_counter()
+                    kind, what = _builtin_outcome(raw)
+                    self.assertLess(time.perf_counter() - started, 5)
+                    if expect == "ok":
+                        self.assertEqual(kind, "ok", what)
+                    else:
+                        self.assertEqual(kind, "refused", what)
+                        self.assertIn(expect, what)
+
+    def test_an_unexpected_failure_in_the_built_in_reader_is_a_named_error_not_a_traceback(self):
+        def broken(raw):
+            raise IndexError("string index out of range")
+        saved = validate_skill._mini_yaml
+        validate_skill._mini_yaml = broken
+        try:
+            with without_pyyaml():
+                with self.assertRaises(ValueError) as cm:
+                    validate_skill._parse_frontmatter("---\nname: good-skill\n---\n")
+        finally:
+            validate_skill._mini_yaml = saved
+        self.assertIn("IndexError", str(cm.exception))
+        self.assertIn("install PyYAML", str(cm.exception))
+
+    def _check_md(self, tmp, label, frontmatter):
+        skill = make_skill(Path(tmp) / label, md_bytes=f"---\n{frontmatter}---\n\n# Body\n".encode("utf-8"))
+        return validate_skill.check(skill)[0]
+
+    def _keys(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            for key, kind in (("on", "a boolean"), ("yes", "a boolean"), ("1", "a number"), ("null", "null")):
+                with self.subTest(key):
+                    errors = self._check_md(tmp, key, f"name: good-skill\ndescription: Use when asked.\n{key}: x\n")
+                    self.assertEqual(errors, [f"a frontmatter key is read by YAML as {kind} "
+                                              f"({ {'a boolean': True, 'a number': 1, 'null': None}[kind]}), not text; "
+                                              "quote it, or drop it"])
+            errors = self._check_md(tmp, "quoted", "name: good-skill\ndescription: Use when asked.\n'on': x\n")
+            self.assertEqual(errors, ["frontmatter keys not allowed: on"])
+
+    def test_a_key_yaml_types_is_named_without_pyyaml(self):
+        """N6: a key YAML reads as a boolean, number or null is an ERROR line naming it, never a TypeError."""
+        with without_pyyaml():
+            self._keys()
+
+    @unittest.skipUnless(_has_pyyaml(), "PyYAML is not installed here")
+    def test_a_key_yaml_types_is_named_with_pyyaml(self):
+        self._keys()
+        with tempfile.TemporaryDirectory() as tmp:
+            errors = self._check_md(tmp, "tilde", "name: good-skill\ndescription: Use when asked.\n~: x\n")
+            self.assertEqual(errors, ["a frontmatter key is read by YAML as null (None), not text; quote it, or drop it"])
+
+    def test_a_description_that_is_a_list_or_mapping_is_named_so(self):
+        """N7: a list or mapping description is called a list or a mapping, never a date."""
+        with tempfile.TemporaryDirectory() as tmp:
+            for label, value, kind in (("list", "\n  - Use when asked.", "a list"), ("map", " {when: asked}", "a mapping"),
+                                       ("date", " 2026-09-30", "a date")):
+                with self.subTest(label):
+                    errors = self._check_md(tmp, label, f"name: good-skill\ndescription:{value}\n")
+                    self.assertEqual(len(errors), 1, errors)
+                    self.assertTrue(errors[0].startswith(f"description is {kind} ("), errors)
+                    advice = "write it as one line of text, or a > block" if label != "date" else "quote it"
+                    self.assertIn(advice, errors[0])
+
+    def test_no_script_or_test_holds_an_invisible_literal_character(self):
+        """N8: a literal line separator, BOM, control or private-use character is invisible in an editor and a diff;
+        the scripts write escapes by name. (A tool that decodes a backslash-u escape while writing a file is how
+        they got in.)"""
+        import unicodedata
+        self.assertEqual(validate_skill.YAML_ESCAPES["L"], chr(0x2028))
+        self.assertEqual(validate_skill.YAML_ESCAPES["P"], chr(0x2029))
+        files = sorted(SCRIPTS.glob("*.py")) + sorted((REPO / "tests").glob("*.py"))
+        self.assertGreaterEqual(len(files), 4)
+        found = []
+        for path in files:
+            with open(path, encoding="utf-8", newline="") as f:
+                text = f.read()
+            for number, line in enumerate(text.split("\n"), 1):
+                for ch in line.rstrip("\r"):
+                    if ch == " " or ch == "\t":
+                        continue
+                    if unicodedata.category(ch) in ("Cc", "Cf", "Zl", "Zp", "Zs", "Co", "Cn"):
+                        found.append(f"{path.name}:{number}: U+{ord(ch):04X}")
+        self.assertEqual(found, [])
+
+    def test_the_docs_list_the_subset_and_the_refusal(self):
+        for doc in (REPO / "sc2" / "SKILL.md", REPO / "README.md"):
+            text = doc.read_text(encoding="utf-8")
+            with self.subTest(doc.name):
+                self.assertIn("reads this subset of YAML and refuses the rest by name", text)
+                for shape in ("plain, single- or double-quoted", "`>` and `|` blocks", "flow lists",
+                              "block lists", "one level of nested mapping", "comments, empty values and null"):
+                    self.assertIn(shape, text)
+                self.assertIn("pip install pyyaml", text)
+                self.assertNotIn("with and without PyYAML for the shapes a SKILL.md uses", text)
 
 
 if __name__ == "__main__":

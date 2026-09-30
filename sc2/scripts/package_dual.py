@@ -45,6 +45,11 @@ packaged at the zip format's nearest edge instead of failing as unreadable; a da
 each edge is one line for all its files, not one per file; a skills home that exists but takes no new folder
 from this user is refused before anything is built, in the voice of every other message; --version must start
 and end with a digit or letter and is at most 64 characters, so the .zip's name is one every file system takes.
+Updated: 2026-09-30 15:37 ET — v1.10: a skills home not made yet is probed at the nearest folder above it, so one under a
+folder that takes no new folder is refused before anything is built; the probe runs once (main, not deploy
+again) and one that cannot be removed is named; every deploy message says the reason in words, never as an
+[Errno] repr; each file past a date edge is listed as "name dated YYYY-MM-DD" (or "before 1970", "past about
+3000" where localtime refuses), with no parentheses inside parentheses.
 
   {name}.skill       what claude.ai and the Claude desktop app install: upload it
                       in the skill settings, or open the file card an agent presents
@@ -224,8 +229,10 @@ def create_zip(skill_path: Path, output_path: Path) -> int:
                 modified = time.localtime(mtime)
             except (OSError, OverflowError, ValueError):
                 modified = None
+            # the side of a date localtime refuses: near 1970 (a zone west of UTC puts 0 in 1969) or past 3000
+            before = mtime < 86400 * 366 * 500
             if modified is None:
-                date_time, where = ((1980, 1, 1, 0, 0, 0), early) if mtime < 0 else ((2107, 12, 31, 23, 59, 58), late)
+                date_time, where = ((1980, 1, 1, 0, 0, 0), early) if before else ((2107, 12, 31, 23, 59, 58), late)
             elif modified.tm_year < 1980:
                 date_time, where = (1980, 1, 1, 0, 0, 0), early
             elif modified.tm_year > 2107:
@@ -233,7 +240,10 @@ def create_zip(skill_path: Path, output_path: Path) -> int:
             else:
                 date_time, where = tuple(modified)[:6], None
             if where is not None:
-                where.append(shown if modified is None else f"{shown} ({time.strftime('%Y-%m-%d', modified)})")
+                # every file dated, none in nested parentheses; a date localtime refuses is named by its side
+                when = (time.strftime("%Y-%m-%d", modified) if modified is not None
+                        else "before 1970" if before else "past about 3000")
+                where.append(f"{shown} dated {when}")
             info = zipfile.ZipInfo(arcname.as_posix(), date_time=date_time)
             info.compress_type = zipfile.ZIP_DEFLATED
             mode = 0o755 if data.startswith(b"#!") else 0o644  # a script with a shebang is stored executable
@@ -246,7 +256,7 @@ def create_zip(skill_path: Path, output_path: Path) -> int:
                                 (late, "past the zip format's 2107 ceiling", "2107-12-31")):
         if names:
             listed = ", ".join(names[:3]) + (f" and {len(names) - 3} more" if len(names) > 3 else "")
-            _say(f"ℹ️ {len(names)} file{'s are' if len(names) > 1 else ' is'} dated {edge} ({listed}); "
+            _say(f"ℹ️ {len(names)} file{'s are' if len(names) > 1 else ' is'} dated {edge}: {listed}; "
                  f"{'their entries are' if len(names) > 1 else 'its entry is'} dated {stored}")
     return count
 
@@ -343,7 +353,7 @@ def _land(pairs):
                 what.append(f"the earlier {back.name} is at {old}"
                             + (f" and the new one stands at {back}" if back in stuck else f" and {back} is empty"))
             what.extend(f"the new {new.name} stands at {new}" for new in stuck if new not in held_backs)
-            raise RuntimeError(f"{e.filename} could not be written ({e.strerror}), and putting things back failed too: "
+            raise RuntimeError(f"{e.filename} could not be written ({e.strerror or e}), and putting things back failed too: "
                                f"{'; '.join(what)}. The archives at their names no longer match: when they are free, "
                                f"delete each new file, rename each .old back to its name, and run again") from e
         raise
@@ -470,8 +480,9 @@ def _file_in_way(path: Path):
     return None
 
 
-def _refusal(skill_name: str, home: Path, source=None):
-    """Why deploying skill_name into home would harm something, or None when it is safe."""
+def _refusal(skill_name: str, home: Path, source=None, probe=True):
+    """Why deploying skill_name into home would harm something, or None when it is safe. probe: also try
+    one empty folder where the skill's folder would be made (asked once, before anything is built)."""
     blocked = _file_in_way(home)
     if blocked:
         return f"{home} is not a folder" if blocked == home else f"{blocked} is a file, so {home} cannot be made"
@@ -480,18 +491,28 @@ def _refusal(skill_name: str, home: Path, source=None):
         return f"{target} is a link; deploy to the folder it points at instead"
     if target.exists() and not target.is_dir():
         return f"{target} is a file, not a skill folder"
-    if not target.exists() and home.is_dir():
-        # The skill's folder is new here: a home that exists but takes no new folder from this user
-        # (C:\Program Files, an ACL deny) is a refusal now, before anything is built, not after both
-        # archives are written. One empty probe folder, made with O_EXCL and removed at once.
-        try:
-            probe = _fresh(home, ".probe-", "", directory=True)
-        except OSError as e:
-            return f"{home} takes no new folder from this user ({e.strerror or e}); choose a skills home you may write to"
-        try:
-            probe.rmdir()
-        except OSError:
-            pass
+    if probe and not target.exists():
+        # The skill's folder is new here: a home, or the nearest folder above a home not made yet, that takes
+        # no new folder from this user (C:\Program Files, an ACL deny) is a refusal now, before anything is
+        # built, not after both archives are written. One empty probe folder, made with O_EXCL and removed at
+        # once; one that cannot be removed is named, never left unmentioned in the user's skills home.
+        where = home
+        while not where.exists() and where.parent != where:
+            where = where.parent
+        if where.is_dir():
+            try:
+                made = _fresh(where, ".probe-", "", directory=True)
+            except OSError as e:
+                if where == home:
+                    return (f"{home} takes no new folder from this user ({e.strerror or e}); choose a skills home "
+                            "you may write to")
+                return (f"{home} could not be made: {where} takes no new folder from this user ({e.strerror or e}); "
+                        "choose a skills home you may write to")
+            try:
+                made.rmdir()
+            except OSError as e:
+                _say(f"⚠️ {made} is an empty folder this run made to test the skills home and could not remove "
+                     f"({e.strerror or e}); delete it")
     # A skill developed in place under its skills home is the very folder being
     # packaged: replacing it would delete everything the archive leaves out.
     if source is not None and (_inside(target, source) or _inside(source, target)):
@@ -531,7 +552,7 @@ def _unpack(archive: Path, skill_name: str, target: Path):
 
 
 def deploy(archive: Path, skill_name: str, home: Path, source=None) -> Path:
-    why = _refusal(skill_name, home, source)
+    why = _refusal(skill_name, home, source, probe=False)  # main() probed before building; mkdir below says the rest
     if why:
         raise RuntimeError(f"{why}; nothing changed")
     target = home / skill_name
@@ -577,13 +598,14 @@ def deploy(archive: Path, skill_name: str, home: Path, source=None) -> Path:
             if created:
                 target.rmdir()
         except OSError as e2:
-            raise RuntimeError(f"{target} could not be replaced ({e}), and putting the old copy back "
-                               f"failed ({e2}); the old files are in {aside}") from e2
-        raise RuntimeError(f"{target} could not be replaced ({e}); the old copy is back, nothing changed") from e
+            raise RuntimeError(f"{target} could not be replaced ({e.strerror or e}), and putting the old copy back "
+                               f"failed ({e2.strerror or e2}); the old files are in {aside}") from e2
+        raise RuntimeError(f"{target} could not be replaced ({e.strerror or e}); the old copy is back, nothing "
+                           "changed") from e
     try:
         _remove(aside)
     except OSError as e:
-        _say(f"⚠️ Deployed, but the old copy could not be removed ({e}); delete {aside} when it is free")
+        _say(f"⚠️ Deployed, but the old copy could not be removed ({e.strerror or e}); delete {aside} when it is free")
     for s in stale:
         _say(f"⚠️ {s} is an old copy from an earlier deploy that could not be removed (still in use); "
              "delete it when it is free")
