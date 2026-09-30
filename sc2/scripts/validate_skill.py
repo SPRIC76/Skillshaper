@@ -23,6 +23,10 @@ Updated: 2026-09-30 06:34 ET — v1.5: a dotfile the skill names is an error, si
 out; a bundled script's BOM is a warning, not a compile error (Python runs it); a NUL
 byte in a script is an ERROR line on Python 3.10 too; junk is named once, not also as an
 orphan; beside also means beside the link a skill is reached through.
+Updated: 2026-09-30 12:36 ET — v1.6: a bundled file that cannot be read (held open, no permission) is an ERROR
+line naming it and the reason, not a traceback; a UTF-8 BOM is named in every bundled text
+file, an error where it breaks the file (before a #! line, or in a .json) and left alone in
+a .ps1, which Windows PowerShell reads by its BOM.
 
 Errors are what claude.ai or the Skills API would reject, or what leaves the
 skill broken: frontmatter keys and limits, a name that differs from its folder,
@@ -31,14 +35,18 @@ does not exist or is a dotfile the package leaves out (bare or ./-prefixed; test
 *_test.py, anything under tests/ - name throwaway fixtures and are exempt),
 a bundled Python script that does not compile, a file that is not UTF-8 (a script
 that starts with #! and holds a NUL byte carries a binary payload, is stored
-byte-for-byte, and is exempt).
+byte-for-byte, and is exempt), a bundled file that cannot be read (held open by
+another program, or no permission), and a UTF-8 BOM where it breaks the file: before
+a #! line, which no system then honours, or in a .json, which JSON forbids and
+json.loads rejects.
 
 Warnings are what makes a skill trigger badly or age badly: no "when to use" cue
 in the description (the description is all a model sees when it picks a skill),
 trigger phrases kept in the body instead, files nothing points to, long
-references without a contents list, a UTF-8 BOM, and paths from sandboxes that
-no longer exist (/mnt/skills, /home/claude), one person's user folder in any
-letter case, or tool names only one surface has.
+references without a contents list, a UTF-8 BOM in SKILL.md or any other bundled
+text file (a .ps1 excepted: Windows PowerShell reads a UTF-8 script by its BOM),
+and paths from sandboxes that no longer exist (/mnt/skills, /home/claude), one
+person's user folder in any letter case, or tool names only one surface has.
 
 Usage:
     python validate_skill.py <skill-folder> [<skill-folder> ...] [--strict]
@@ -134,13 +142,22 @@ def _carries_payload(path):
     return data.startswith(b"#!") and b"\0" in data
 
 
+def _unreadable(rel, e):
+    """The ERROR line for a file the operating system would not let this run read."""
+    return (f"{rel} could not be read ({e.strerror or e}); close the program holding it open, or check "
+            "its permissions, and run again")
+
+
 def _read_utf8(path, rel, errors):
-    """Text of path, or None after an ERROR line naming the file and the bad byte."""
+    """Text of path, or None after an ERROR line naming the file and the bad byte, or why it
+    could not be read (held open with no share mode, no permission)."""
     try:
         return path.read_text(encoding="utf-8")
     except UnicodeDecodeError as e:
         errors.append(f"{rel} is not UTF-8 ({e.reason} at byte {e.start}); save it as UTF-8")
-        return None
+    except OSError as e:
+        errors.append(_unreadable(rel, e))
+    return None
 
 
 # Every released version opens its docstring with this line; only the owner's name in it has changed
@@ -289,10 +306,17 @@ def check(skill_dir, out=None):
     texts = {md: text}
     for d in BUNDLE_DIRS:
         for p in (p for p in tree if p.relative_to(skill).parts[0] == d):
-            if any(part.startswith(".") for part in p.relative_to(skill).parts) or _carries_payload(p):
+            rel = p.relative_to(skill)
+            if any(part.startswith(".") for part in rel.parts):
+                continue
+            try:
+                if _carries_payload(p):
+                    continue
+            except OSError as e:  # held open with no share mode, or no permission: named once, here
+                errors.append(_unreadable(rel.as_posix(), e))
                 continue
             if p.is_file() and p.suffix.lower() in {".md", ".txt", ".py", ".json", ".sh", ".ps1", ".yaml", ".yml"}:
-                t = _read_utf8(p, p.relative_to(skill).as_posix(), errors)
+                t = _read_utf8(p, rel.as_posix(), errors)
                 if t is not None:
                     texts[p] = t
 
@@ -321,14 +345,27 @@ def check(skill_dir, out=None):
         if p.suffix == ".md" and p in texts and texts[p].count("\n") > 300:
             if "contents" not in texts[p][:1500].lower():
                 warnings.append(f"{rel} is over 300 lines with no contents list")
-        if p.suffix == ".py" and p in texts:
-            source = texts[p]
-            if source.startswith("﻿"):  # Python skips a BOM when it runs the file
+        source = texts.get(p)
+        if source is not None and source.startswith("﻿"):
+            # A BOM breaks a file where the first bytes carry meaning: no system honours a #! line
+            # that does not open the file (and the packager stores it without the executable bit),
+            # and JSON forbids a BOM (json.loads rejects it). Elsewhere it is a warning, except in
+            # a .ps1: Windows PowerShell reads a UTF-8 script by its BOM and ANSI without one.
+            if source.startswith("﻿#!"):
+                errors.append(f"{rel} has a UTF-8 byte-order mark (BOM) before its #! line, so no system runs it as "
+                              f"a script and it is not stored executable; save it as plain UTF-8")
+            elif p.suffix.lower() == ".json":
+                errors.append(f"{rel} starts with a UTF-8 byte-order mark (BOM), which JSON forbids and json.loads "
+                              f"rejects; save it as plain UTF-8")
+            elif p.suffix.lower() == ".py":  # Python skips a BOM when it runs the file
                 warnings.append(f"{rel} starts with a UTF-8 byte-order mark (BOM); Python runs it, but save it "
                                 f"as plain UTF-8")
-                source = source[1:]
+            elif p.suffix.lower() != ".ps1":
+                warnings.append(f"{rel} starts with a UTF-8 byte-order mark (BOM); save it as plain UTF-8, which "
+                                f"every surface reads")
+        if p.suffix == ".py" and source is not None:
             try:
-                compile(source, str(p), "exec")
+                compile(source.lstrip("﻿"), str(p), "exec")
             except (SyntaxError, ValueError) as e:  # a NUL byte is a ValueError on Python 3.10
                 errors.append(f"{rel} does not compile: {e}")
 

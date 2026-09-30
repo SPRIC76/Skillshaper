@@ -67,6 +67,35 @@ def chdir(path):
         os.chdir(old)
 
 
+@contextlib.contextmanager
+def unreadable(path):
+    """Hold path so that nothing can read it: on Windows a handle with no share mode (what a zip
+    tool or a preview handler holds), elsewhere no permission bits (which root ignores)."""
+    if os.name == "nt":
+        import ctypes
+        from ctypes import wintypes
+        k = ctypes.windll.kernel32
+        k.CreateFileW.restype = wintypes.HANDLE
+        k.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, ctypes.c_void_p,
+                                  wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
+        handle = k.CreateFileW(str(path), 0x80000000, 0, None, 3, 0x80, None)
+        if handle in (None, 0, 0xFFFFFFFFFFFFFFFF):
+            raise unittest.SkipTest("no exclusive handle on this file")
+        try:
+            yield
+        finally:
+            k.CloseHandle(handle)
+    else:
+        if os.geteuid() == 0:
+            raise unittest.SkipTest("root reads everything")
+        mode = os.stat(path).st_mode
+        os.chmod(path, 0)
+        try:
+            yield
+        finally:
+            os.chmod(path, mode)
+
+
 class RepoLayout(unittest.TestCase):
     """High: the skill must sit in sc2/ so */SKILL.md discovery finds it, and validate clean."""
 
@@ -400,6 +429,41 @@ class FifthReview(unittest.TestCase):
                                                                      "scripts/desktop.ini": "[.ShellClassInfo]\n"})
             _, warnings = validate_skill.check(skill)
             self.assertEqual([w for w in warnings if "desktop.ini" in w], ["junk in the skill folder: scripts/desktop.ini"])
+
+
+class SixthReview(unittest.TestCase):
+    """The sixth review (42503ab): a bundled file that cannot be read, and a BOM in every bundled text file."""
+
+    def test_a_bundled_file_that_cannot_be_read_is_an_error_line_not_a_traceback(self):
+        for rel in ("references/z.md", "assets/logo.png"):
+            with self.subTest(rel), tempfile.TemporaryDirectory() as tmp:
+                skill = make_skill(tmp, body="See references/z.md and assets/logo.png.",
+                                   files={"references/z.md": "z\n", "assets/logo.png": b"\x89PNG"})
+                with unreadable(skill / rel):
+                    errors, _ = validate_skill.check(skill)
+                    out = io.StringIO()
+                    with contextlib.redirect_stdout(out):
+                        rc = validate_skill.main([str(skill)])
+                self.assertEqual(len(errors), 1, errors)
+                self.assertRegex(errors[0], rf"^{rel} could not be read \(.+\); ")
+                self.assertEqual(rc, 1)
+                self.assertIn("good-skill: 1 error(s)", out.getvalue())
+
+    def test_a_bom_in_every_bundled_text_file_is_named_and_an_error_where_it_breaks_the_file(self):
+        bom = "﻿"
+        files = {"references/notes.md": f"{bom}# notes\n", "scripts/x.txt": f"{bom}x\n", "scripts/c.yaml": f"{bom}a: 1\n",
+                 "scripts/w.ps1": f"{bom}Write-Host hi\n", "scripts/run.sh": f"{bom}#!/bin/sh\necho hi\n",
+                 "scripts/data.json": f'{bom}{{"a": 1}}\n', "scripts/sheb.py": f"{bom}#!/usr/bin/env python3\nprint(1)\n",
+                 "scripts/bom.py": f"{bom}print(1)\n"}
+        with tempfile.TemporaryDirectory() as tmp:
+            skill = make_skill(tmp, body="See " + ", ".join(files) + ".", files=files)
+            errors, warnings = validate_skill.check(skill)
+            self.assertEqual(sorted(e.split(" ")[0] for e in errors), ["scripts/data.json", "scripts/run.sh", "scripts/sheb.py"], errors)
+            self.assertTrue(all("byte-order mark" in e for e in errors), errors)
+            self.assertEqual(sorted(w.split(" ")[0] for w in warnings if "byte-order mark" in w),
+                             ["references/notes.md", "scripts/bom.py", "scripts/c.yaml", "scripts/x.txt"], warnings)
+            self.assertFalse([w for w in warnings if "w.ps1" in w], warnings)  # Windows PowerShell reads UTF-8 by its BOM
+            self.assertFalse([e for e in errors if "does not compile" in e], errors)
 
 
 if __name__ == "__main__":

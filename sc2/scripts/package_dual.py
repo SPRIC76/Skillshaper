@@ -27,6 +27,12 @@ a LICENSE linked from there ships; an --output inside the deploy target is refus
 before packaging; an archive that cannot be written (left read-only, held open) stops
 the run with a message instead of a traceback; .envrc marks a working copy; a stale
 old copy is named as still in use, since a read-only one is now removed.
+Updated: 2026-09-30 12:36 ET — v1.7: both archives land together or not at all (each built under a temporary
+name beside its target, the pair moved into place once both are complete, the earlier pair put
+back if either move fails); a source file that cannot be read, an archive that cannot be
+replaced and an --output that cannot be made are each one message naming the file and the
+reason, the earlier archives untouched; run inside the skill through a link that loops back
+into it, the archives go beside its real folder, so an archive never packs itself.
 
   {name}.skill       what claude.ai and the Claude desktop app install: upload it
                       in the skill settings, or open the file card an agent presents
@@ -44,9 +50,14 @@ there ships. A file that is UTF-8 text
 throughout, with no NUL byte, and is a TEXT_SUFFIXES type, has no suffix, or starts
 with #! is written with LF line endings whatever the checkout uses; every other file
 stays byte-for-byte; a file that starts with #! is stored executable. The archives are
-written outside the skill folder: beside it when run inside it, and an --output
-inside it or inside the deploy target, or one that is a file, is refused; an
-archive that cannot be written stops the run with a message.
+written outside the skill folder: beside it when run inside it (beside its real folder
+when the path given reaches it through a link that loops back into it), and an --output
+inside it or inside the deploy target, or one that is a file, is refused. Both archives
+land together or not at all: each is built under a temporary name beside its target and
+the pair is moved into place only when both are complete, the earlier pair put back if
+either move fails. A source file that cannot be read, an archive that cannot be
+replaced (left read-only, held open) and an --output that cannot be made each stop the
+run with one message naming the file and the reason; the earlier archives are untouched.
 
 --deploy HOME also replaces the contents of HOME/{name}/ with exactly what was
 packaged, only when that folder is absent, empty, or an installed copy of this same
@@ -174,12 +185,21 @@ def _files(skill_path: Path, out=None):
     return found
 
 
+class ReadFailed(OSError):
+    """A file the archive needs could not be read; filename names it, strerror says why."""
+
+
 def create_zip(skill_path: Path, output_path: Path) -> int:
+    """Write the archive of skill_path to output_path; raises ReadFailed for a source file the
+    operating system would not let this run read (held open with no share mode, no permission)."""
     count = 0
     with zipfile.ZipFile(output_path, "w", zipfile.ZIP_DEFLATED) as zf:
         for file_path in _files(skill_path, output_path.parent):
             arcname = file_path.relative_to(skill_path.parent)
-            data = file_path.read_bytes()
+            try:
+                data = file_path.read_bytes()
+            except OSError as e:
+                raise ReadFailed(e.errno, e.strerror or str(e), str(file_path)) from e
             info = zipfile.ZipInfo.from_file(file_path, arcname.as_posix())
             info.compress_type = zipfile.ZIP_DEFLATED
             mode = 0o755 if data.startswith(b"#!") else 0o644  # a script with a shebang is stored executable
@@ -188,6 +208,93 @@ def create_zip(skill_path: Path, output_path: Path) -> int:
             info.external_attr = (stat.S_IFREG | mode) << 16
             zf.writestr(info, data)
             count += 1
+    return count
+
+
+def _unwritable(path: Path):
+    """Why an archive already at path could not be replaced (left read-only, held open with no
+    share mode), or None; asked before anything is built, so a run that would fail changes nothing."""
+    if not path.exists():
+        return None
+    try:
+        open(path, "r+b").close()
+    except OSError as e:
+        return e.strerror or str(e)
+    return None
+
+
+def _land(pairs):
+    """Move each finished file onto its target, all or none: a target already there is set aside
+    beside it first; if any move fails, every old file goes back and every new one is removed, and
+    the OSError names the target. The pattern deploy() uses: the new pair lands whole, or nothing changes."""
+    aside, landed = [], []
+    try:
+        for tmp, target in pairs:
+            try:
+                if target.exists():
+                    fd, old = tempfile.mkstemp(dir=target.parent, prefix=target.name + ".", suffix=".old")
+                    os.close(fd)
+                    try:
+                        os.replace(target, old)
+                    except OSError:
+                        os.unlink(old)
+                        raise
+                    aside.append((Path(old), target))
+                os.replace(tmp, target)
+                landed.append(target)
+            except OSError as e:
+                raise OSError(e.errno, e.strerror or str(e), str(target)) from e
+    except OSError as e:
+        # Put things back with every step tried, then judge by what is left on disk: an earlier
+        # archive still under its aside name, or a new file that could not be removed, is named.
+        for new in landed:
+            try:
+                new.unlink()
+            except OSError:
+                pass
+        for old, back in aside:
+            try:
+                os.replace(old, back)
+            except OSError:
+                pass
+        left = [str(old) for old, _ in aside if old.exists()]
+        backs = {back for _, back in aside}
+        stuck = [str(new) for new in landed if new not in backs and new.exists()]
+        if left or stuck:
+            what = "; ".join(filter(None, [f"the earlier archives are at {', '.join(left)}" if left else "",
+                                           f"the new {', '.join(stuck)} could not be removed" if stuck else ""]))
+            raise RuntimeError(f"{e.filename} could not be written ({e.strerror}), and putting things back failed "
+                               f"too: {what}") from e
+        raise
+    for old, _ in aside:
+        try:
+            old.unlink()
+        except OSError as e:  # a hold that arrived after the rename: nothing of the new pair is affected
+            _say(f"⚠️ The earlier archive set aside as {old} could not be removed ({e.strerror or e}); delete it "
+                 "when it is free")
+
+
+def build_archives(skill_path: Path, skill_file: Path, zip_file: Path) -> int:
+    """Both archives, whole or not at all: the .skill is built under a temporary name beside its
+    target, copied to the .zip's temporary name, and the pair is moved into place only when both
+    are complete. ReadFailed names a source file that could not be read; any other OSError names
+    the archive that could not be written. Nothing but the temporaries changes until the move."""
+    out = skill_file.parent
+    temps = []
+    try:
+        for target in (skill_file, zip_file):
+            try:
+                fd, tmp = tempfile.mkstemp(dir=out, prefix=target.name + ".", suffix=".part")
+            except OSError as e:  # the folder takes no new file: named by the archive it was for
+                raise OSError(e.errno, e.strerror or str(e), str(target)) from e
+            os.close(fd)
+            temps.append(Path(tmp))
+        count = create_zip(skill_path, temps[0])
+        shutil.copyfile(temps[0], temps[1])
+        _land(list(zip(temps, (skill_file, zip_file))))
+    finally:
+        for tmp in temps:  # gone once landed; left only by a failure
+            tmp.unlink(missing_ok=True)
     return count
 
 
@@ -394,6 +501,8 @@ def main(argv=None):
         out = Path.cwd().resolve()
         if _inside(out, skill_path):
             out = skill_path.parent.resolve()  # run inside the skill: the archives go beside it
+            if _inside(out, skill_path):  # the path given loops back into the skill through a link: beside its real folder
+                out = skill_path.resolve().parent
     else:
         out = Path(args.output).resolve()
         if _inside(out, skill_path):
@@ -426,15 +535,31 @@ def main(argv=None):
     _say(f"✅ Valid ({len(warnings)} warning(s))")
 
     name = skill_path.name
-    out.mkdir(parents=True, exist_ok=True)
+    try:
+        out.mkdir(parents=True, exist_ok=True)
+    except OSError as e:  # a name this system rejects, a drive that does not exist
+        _say(f"❌ --output {out} could not be made ({e.strerror or e}); give --output a folder this system can "
+             f"create. Nothing packaged.")
+        return 1
     skill_file = out / f"{name}.skill"
     zip_file = out / f"{name}-v{args.version}.zip"
+    for target in (skill_file, zip_file):  # an earlier archive left read-only or held open: found before anything is built
+        why = _unwritable(target)
+        if why:
+            _say(f"❌ {target} could not be written ({why}); unlock or close it and run again. Nothing changed.")
+            return 1
     try:
-        count = create_zip(skill_path, skill_file)
-        shutil.copyfile(skill_file, zip_file)
-    except OSError as e:  # an earlier archive left read-only or held open
-        _say(f"❌ {e.filename or out} could not be written ({e.strerror or e}); unlock or close it and "
-             f"run again. Nothing deployed.")
+        count = build_archives(skill_path, skill_file, zip_file)
+    except ReadFailed as e:
+        _say(f"❌ {e.filename} could not be read ({e.strerror}); close the program holding it open, or check its "
+             f"permissions, and run again. Nothing changed.")
+        return 1
+    except RuntimeError as e:  # the earlier pair could not be put back: the message says where it is
+        _say(f"❌ {e}")
+        return 1
+    except OSError as e:  # a hold that the probe could not see (a handle open for reading blocks the move)
+        _say(f"❌ {e.filename or out} could not be written ({e.strerror or e}); unlock or close it and run again. "
+             f"Nothing changed.")
         return 1
     _say(f"📦 {skill_file} ({count} files, {skill_file.stat().st_size / 1024:.1f} KB)")
     _say(f"📦 {zip_file}")

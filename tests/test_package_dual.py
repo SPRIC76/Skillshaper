@@ -100,6 +100,46 @@ def entries(archive):
         return sorted(zf.namelist())
 
 
+def names_in(folder):
+    """Every file under folder as relative posix paths; a link is listed by name, never entered."""
+    found = []
+    for p in sorted(Path(folder).iterdir()):
+        if p.is_dir() and not package_dual._is_link(p):
+            found.extend(p.name + "/" + n for n in names_in(p))
+        else:
+            found.append(p.name)
+    return found
+
+
+@contextlib.contextmanager
+def unreadable(path):
+    """Hold path so that nothing can read it: on Windows a handle with no share mode (what a zip
+    tool or a preview handler holds), elsewhere no permission bits (which root ignores)."""
+    if os.name == "nt":
+        import ctypes
+        from ctypes import wintypes
+        k = ctypes.windll.kernel32
+        k.CreateFileW.restype = wintypes.HANDLE
+        k.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, ctypes.c_void_p,
+                                  wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
+        handle = k.CreateFileW(str(path), 0x80000000, 0, None, 3, 0x80, None)
+        if handle in (None, 0, 0xFFFFFFFFFFFFFFFF):
+            raise unittest.SkipTest("no exclusive handle on this file")
+        try:
+            yield
+        finally:
+            k.CloseHandle(handle)
+    else:
+        if os.geteuid() == 0:
+            raise unittest.SkipTest("root reads everything")
+        mode = os.stat(path).st_mode
+        os.chmod(path, 0)
+        try:
+            yield
+        finally:
+            os.chmod(path, mode)
+
+
 class Deploy(unittest.TestCase):
     """High: deploy replaces a target only when it is absent, empty, or the same skill."""
 
@@ -573,6 +613,119 @@ class FifthReview(unittest.TestCase):
                 rc = package_dual.main(["good-skill", "--version", "1.0"])
             self.assertEqual(rc, 0, out.getvalue())
             self.assertEqual(entries(work / "good-skill.skill"), ["good-skill/LICENSE", "good-skill/SKILL.md"])
+
+
+class SixthReview(unittest.TestCase):
+    """The sixth review (42503ab): a failed run changes neither archive, a message for every failure
+    the run can meet (a file that cannot be read, an archive that cannot be replaced, an --output that
+    cannot be made), and a skill reached through a link that loops back into it never packs itself."""
+
+    def _first_run(self, tmp):
+        """A packaged skill with a root-level file the validator never reads; returns (skill, out, archives before)."""
+        skill = make_skill(Path(tmp) / "src", body="Run scripts/a.py.", files={"scripts/a.py": "print(1)\n", "zz.bin": b"\x00\x01"})
+        out = Path(tmp) / "out"
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(package_dual.main([str(skill), "--version", "1.0", "--output", str(out)]), 0)
+        (skill / "scripts" / "b.py").write_text("print(2)\n", encoding="utf-8")
+        (skill / "SKILL.md").write_text(GOOD_MD.format(name="good-skill", body="Run scripts/a.py and scripts/b.py."),
+                                        encoding="utf-8", newline="\n")
+        before = {p.name: p.read_bytes() for p in out.iterdir()}
+        self.assertEqual(sorted(before), ["good-skill-v1.0.zip", "good-skill.skill"])
+        return skill, out, before
+
+    def test_a_source_file_that_cannot_be_read_is_named_and_neither_archive_changes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            skill, out, before = self._first_run(tmp)
+            printed = io.StringIO()
+            with unreadable(skill / "zz.bin"), contextlib.redirect_stdout(printed):
+                rc = package_dual.main([str(skill), "--version", "1.0", "--output", str(out), "--deploy", str(Path(tmp) / "home")])
+            self.assertEqual(rc, 1, printed.getvalue())
+            self.assertRegex(printed.getvalue(), r"zz\.bin could not be read \(.+\); ")
+            self.assertNotIn("could not be written", printed.getvalue())
+            self.assertEqual({p.name: p.read_bytes() for p in out.iterdir()}, before)
+            self.assertFalse((Path(tmp) / "home").exists())
+
+    def test_a_bundled_file_that_cannot_be_read_stops_the_run_before_the_output_is_made(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            skill = make_skill(Path(tmp) / "src", body="See references/z.md.", files={"references/z.md": "z\n"})
+            out = Path(tmp) / "out"
+            printed = io.StringIO()
+            with unreadable(skill / "references" / "z.md"), contextlib.redirect_stdout(printed):
+                rc = package_dual.main([str(skill), "--version", "1.0", "--output", str(out)])
+            self.assertEqual(rc, 1, printed.getvalue())
+            self.assertRegex(printed.getvalue(), r"references/z\.md could not be read \(.+\); ")
+            self.assertFalse(out.exists())
+
+    def test_an_output_that_cannot_be_made_is_a_message(self):
+        bad = [Path("x" * 300)]  # a component longer than any file system allows
+        if os.name == "nt":
+            bad.append(Path("out<x"))
+            missing = next((f"{d}:\\" for d in "ZYXWVUTSRQ" if not os.path.exists(f"{d}:\\")), None)
+            if missing:
+                bad.append(Path(missing, "nowhere", "out"))
+        with tempfile.TemporaryDirectory() as tmp:
+            skill = make_skill(Path(tmp) / "src")
+            for output in bad:
+                with self.subTest(str(output)):
+                    output = output if output.is_absolute() else Path(tmp) / output
+                    printed = io.StringIO()
+                    with contextlib.redirect_stdout(printed):
+                        rc = package_dual.main([str(skill), "--version", "1.0", "--output", str(output)])
+                    self.assertEqual(rc, 1, printed.getvalue())
+                    self.assertRegex(printed.getvalue(), r"could not be made \(.+\); ")
+
+    def test_a_skill_reached_through_a_link_that_loops_back_into_it_never_packs_itself(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            skill = make_skill(tmp, body="Run scripts/run.py.", files={"scripts/run.py": "print(1)\n"})
+            (skill / "dev").mkdir()
+            loop = skill / "dev" / "good-skill"
+            if not (make_junction(loop, skill) or make_symlink(loop, skill)):
+                self.skipTest("no folder link on this platform")
+            for cwd, given in ((skill / "dev", "good-skill"), (loop, ".")):
+                with self.subTest(given):
+                    printed = io.StringIO()
+                    with chdir(cwd), contextlib.redirect_stdout(printed):
+                        rc = package_dual.main([given, "--version", "1.0"])
+                    self.assertEqual(rc, 0, printed.getvalue())
+                    self.assertEqual(sorted(names_in(skill)), ["SKILL.md", "dev/good-skill", "scripts/run.py"])
+                    self.assertEqual(entries(Path(tmp) / "good-skill.skill"), ["good-skill/SKILL.md", "good-skill/scripts/run.py"])
+
+    def test_an_archive_that_cannot_be_replaced_leaves_the_earlier_pair_in_place(self):
+        """Either archive held while the pair lands (a hold blocks every move of the held file and every
+        move onto it, on any platform here by simulation): the first is put back, nothing is left beside them."""
+        for held in ("good-skill.skill", "good-skill-v1.0.zip"):
+            with self.subTest(held), tempfile.TemporaryDirectory() as tmp:
+                skill, out, before = self._first_run(tmp)
+                real_replace, calls = package_dual.os.replace, []
+
+                def fail_on_target(src, dst, *a, _held=held):
+                    calls.append((Path(src).name, Path(dst).name))
+                    if Path(src).name == _held or (Path(dst).name == _held and Path(dst).exists()):
+                        raise PermissionError(13, "Permission denied (simulated)", str(src), None, str(dst))
+                    return real_replace(src, dst, *a)
+
+                package_dual.os.replace = fail_on_target
+                printed = io.StringIO()
+                try:
+                    with contextlib.redirect_stdout(printed):
+                        rc = package_dual.main([str(skill), "--version", "1.0", "--output", str(out)])
+                finally:
+                    package_dual.os.replace = real_replace
+                self.assertEqual(rc, 1, printed.getvalue())
+                self.assertRegex(printed.getvalue(), rf"{held.replace('.', chr(92) + '.')} could not be written \(.+\); ")
+                self.assertEqual({p.name: p.read_bytes() for p in out.iterdir()}, before, calls)
+
+    @unittest.skipUnless(os.name == "nt", "a shared-read handle blocks a rename only on Windows")
+    def test_an_archive_held_open_for_reading_is_refused_and_neither_archive_changes(self):
+        for held in ("good-skill.skill", "good-skill-v1.0.zip"):
+            with self.subTest(held), tempfile.TemporaryDirectory() as tmp:
+                skill, out, before = self._first_run(tmp)
+                printed = io.StringIO()
+                with open(out / held, "rb"), contextlib.redirect_stdout(printed):
+                    rc = package_dual.main([str(skill), "--version", "1.0", "--output", str(out)])
+                self.assertEqual(rc, 1, printed.getvalue())
+                self.assertIn("could not be written", printed.getvalue())
+                self.assertEqual({p.name: p.read_bytes() for p in out.iterdir()}, before)
 
 
 class Source(unittest.TestCase):
