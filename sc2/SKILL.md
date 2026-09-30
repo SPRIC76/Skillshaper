@@ -30,8 +30,8 @@ python scripts/validate_skill.py <skill-folder> [--strict]
 
 | Level | Means |
 |-------|-------|
-| **Error** | The Agent Skills specification's rules exclude it, a host would reject it on upload, or the skill is broken; packaging stops. |
-| **Warning** | The skill will trigger badly or age badly; `--strict` treats each as an error. |
+| **Error** | The Agent Skills specification's rules exclude it (its length limits and required fields), a host would reject it on upload, or the skill is broken; packaging stops. |
+| **Warning** | The skill will trigger badly or age badly, or uses a form the specification does not give but hosts accept; `--strict` treats each as an error. |
 
 **Errors:**
 
@@ -50,7 +50,7 @@ python scripts/validate_skill.py <skill-folder> [--strict]
 - `name` missing or null, not text, not kebab-case, over 64 characters, or different from its folder
 - a key YAML reads as a boolean, number or null (an unquoted `on:`, `yes:` or `1:`, and `~:` where PyYAML reads it), named as YAML types it
 - `description` missing or null; not text (an unquoted `1.4`, `yes` or `2026-09-30`, which YAML reads as a number, a boolean or a date: quote it; a list or mapping, named so; a value a `!!` tag made, such as bytes: drop the tag); over 1024 characters; or containing angle brackets, which some hosts reject on upload
-- body over 500 lines
+- body over 500 lines (Skillshaper's own limit, stricter than the specification's recommendation)
 - a referenced `references/`, `scripts/` or `assets/` path, bare or `./`-prefixed, that does not exist — checked in SKILL.md and in every other text file the package ships, a changelog at the root included (a name holding a space, or its `%20` form in a link, is resolved; test files — `*_selftest.py`, `test_*.py`, `*_test.py`, anything under a `tests/` folder — are exempt, since they name throwaway fixtures)
 - a referenced dotfile, which the package leaves out
 - a bundled Python script, `.py` in any letter case, that does not compile (a byte-order mark at its start is only a warning, since Python runs it)
@@ -62,7 +62,7 @@ python scripts/validate_skill.py <skill-folder> [--strict]
 **Warnings:**
 
 - no "when to use" cue in the description ("Use when", "Use before", "Use after", "Use while", "Use for", "Use to", "Triggers on" and the like)
-- by the Agent Skills specification's rules (agentskills.io/specification): `metadata` that is not a mapping of text keys to text values (quote a version: `version: "1.4"`); `license` or `allowed-tools` that is not text (`allowed-tools` is one space-separated string, such as `Bash(git:*) Read`); an empty `compatibility`. Each warning names the form found and the specification's; they are warnings, not errors, because some hosts accept the other forms; `--strict` treats each as an error, as it does every warning
+- by the Agent Skills specification's rules (agentskills.io/specification): `metadata` that is not a mapping of text keys to text values (quote a version: `version: "1.4"`); `license` or `allowed-tools` that is not text (`allowed-tools` is one space-separated string, such as `Bash(git:*) Read`); an empty `compatibility`, or one that is not text (quote `3.10`, which YAML reads as the number 3.1). Each warning names the form found and the specification's; they are warnings, not errors, because some hosts accept the other forms; `--strict` treats each as an error, as it does every warning
 - trigger phrases kept in the body
 - files nothing points to (orphans)
 - references over 300 lines without a contents list

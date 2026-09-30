@@ -63,8 +63,13 @@ drop the tag; "Use before", "Use after" and "Use while" count as when-to-use cue
 Updated: 2026-09-30 17:22 ET — v1.12: the specification's shapes for metadata, license, allowed-tools and an empty
 compatibility are WARNING lines, not errors: hosts accept the other forms in practice, and 9 of 442 real, working
 skills use one, so packaging goes on; each names its form and the specification's, and --strict counts it.
+Updated: 2026-09-30 17:42 ET — v1.13: a name that is not text (123, a date) is an error, never stringified to pass;
+a compatibility that is not text is a warning; allowed-tools advice is built from the list; the levels say
+what they hold (the specification's length limits and required fields; a form hosts accept) and the
+500-line body limit is named as Skillshaper's own.
 
-Errors are what the Agent Skills specification's rules exclude, what some hosts reject on upload
+Errors are what the Agent Skills specification's rules exclude (its length limits and required fields),
+what some hosts reject on upload
 (angle brackets in the description, more than one SKILL.md), or what leaves the
 skill broken: frontmatter keys and limits (and frontmatter that is not valid YAML,
 read by PyYAML when it is installed; without it, the built-in reader reads this subset
@@ -76,7 +81,7 @@ mappings of such values; block lists of one-line items at the key's indent or in
 one level of nested mapping; comments, empty values and null forms; no tab anywhere;
 values typed as PyYAML types them), a key YAML
 types as a boolean, number or null, a name that differs from its folder, a description that is not text,
-angle brackets in the description, a body over 500 lines, a referenced file that
+angle brackets in the description, a body over 500 lines (Skillshaper's own limit, stricter than the specification's recommendation), a referenced file that
 does not exist or is a dotfile the package leaves out (bare or ./-prefixed, in SKILL.md and in
 every other text file the package ships; test files - *_selftest.py, test_*.py,
 *_test.py, anything under tests/ - name throwaway fixtures and are exempt),
@@ -88,7 +93,8 @@ before the #! line of a script that is run by name (.sh, .bash, .zsh, .py, or no
 start of a .sh, .bash or .zsh (a shell reads it as part of the first command), or in a .json,
 which JSON forbids and json.loads rejects.
 
-Warnings are what makes a skill trigger badly or age badly: no "when to use" cue
+Warnings are what makes a skill trigger badly or age badly, or uses a form the specification
+does not give but hosts accept: no "when to use" cue
 in the description (the description is all a model sees when it picks a skill),
 trigger phrases kept in the body instead, files nothing points to, long
 references without a contents list, a UTF-8 BOM in SKILL.md or any other text file
@@ -99,7 +105,7 @@ person's user folder in any letter case, or tool names only one surface has. The
 specification's shapes (agentskills.io/specification, read 2026-09-30) are warnings, since some hosts
 accept the other forms (--strict counts them): metadata that is not a mapping of text keys to text
 values, license or allowed-tools that is not text (allowed-tools is one space-separated string), and
-an empty compatibility.
+an empty compatibility or one that is not text.
 
 Usage:
     python validate_skill.py <skill-folder> [<skill-folder> ...] [--strict]
@@ -1068,14 +1074,21 @@ def _spec_shapes(fm):
                               else "write it as one line of text" if isinstance(v, (list, dict, bytes, set))
                               else "quote it")
                     say(f"metadata value {k}", f"{kind(v)} ({_shown(v)})", "text values", advice)
-    for key, spec_form, advice in (("license", "text (a license name or a bundled license file's name)", ""),
-                                   ("allowed-tools", "a space-separated string", "write it as Bash(git:*) Read")):
-        if key in fm and not isinstance(fm[key], str):
-            say(key, kind(fm[key]), spec_form, advice)
+    if "license" in fm and not isinstance(fm["license"], str):
+        say("license", kind(fm["license"]), "text (a license name or a bundled license file's name)")
+    tools = fm.get("allowed-tools")
+    if "allowed-tools" in fm and not isinstance(tools, str):
+        advice = (f"write it as {' '.join(tools)}" if isinstance(tools, list) and tools
+                  and all(isinstance(t, str) for t in tools)
+                  else "write it as one space-separated string, such as Bash(git:*) Read")
+        say("allowed-tools", kind(tools), "a space-separated string", advice)
     if "compatibility" in fm:
         comp = fm["compatibility"]
         if comp is None or (isinstance(comp, str) and not comp.strip()):
             say("compatibility", "empty", "1 to 500 characters", "write the requirement, or drop the key")
+        elif not isinstance(comp, str):  # 3.10 is read as the number 3.1, false as a boolean
+            say("compatibility", f"{kind(comp)} ({_shown(comp)})", "1 to 500 characters of text",
+                "write it as one line of text" if isinstance(comp, (list, dict)) else "quote it")
     return warnings
 
 
@@ -1121,6 +1134,8 @@ def check(skill_dir, out=None):
     name = "" if fm.get("name") is None else _shown(fm["name"]).strip()
     if isinstance(fm.get("name"), (list, dict)):  # named as what it is, never quoted as if it were the name
         errors.append(f"name is {_kind(fm['name'])} ({name}), not text: write the folder's kebab-case name")
+    elif fm.get("name") is not None and not isinstance(fm["name"], str):  # 123 or a date: never stringified to pass
+        errors.append(f"name is {_kind(fm['name'])} ({name}), not text: quote it")
     elif not name:
         errors.append("frontmatter has no name")
     else:

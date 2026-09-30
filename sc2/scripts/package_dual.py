@@ -57,6 +57,9 @@ skills folder (the Agent Skills format is for any agent).
 Updated: 2026-09-30 17:14 ET — v1.12: when the old copy could not be moved aside, nothing left it, so the message says
 nothing changed and names only the empty folder it could not remove (removed whenever it can be); old files
 are named as being in the aside folder only when some are still there.
+Updated: 2026-09-30 17:42 ET — v1.13: an installed copy's name is read as YAML reads it (a trailing comment dropped),
+the name line as written only when the frontmatter is refused; the help states --version's first and last
+character and 64-character cap, and the 2107-12-31 clamp.
 
   {name}.skill       for a host that installs a skill from an uploaded archive: upload
                       it in its skill settings, or open the file card an agent presents
@@ -84,8 +87,10 @@ either move fails. A source file or folder that cannot be read, an archive that 
 replaced (left read-only, held open, a folder standing at its name), an --output that cannot
 be made or that takes no new file from this user, and a full disk each stop the run with one
 message naming the file and the reason; the earlier archives are untouched. --version takes
-digits, letters, dots and dashes (1.0, 2.1-rc1), so the .zip always lands in --output. A
-file dated before 1980, which the zip format cannot hold, is stored dated 1980-01-01 and named.
+digits, letters, dots and dashes, starting and ending with a digit or letter, at most 64
+characters (1.0, 2.1-rc1), so the .zip always lands in --output under a name every file system
+takes. The zip format holds dates from 1980 to 2107: a file dated before 1980 is stored dated
+1980-01-01, one dated after 2107 is stored dated 2107-12-31, and each edge is named once.
 
 --deploy HOME also replaces the contents of HOME/{name}/ with exactly what was
 packaged, only when that folder is absent, empty, or an installed copy of this same
@@ -411,8 +416,13 @@ def _skill_name_in(folder: Path):
     md = folder / "SKILL.md"
     if not md.is_file():
         return None
-    m = re.search(r"^name:\s*(.+?)\s*$", md.read_text(encoding="utf-8", errors="replace"), re.M)
-    return m.group(1).strip("'\"") if m else None
+    text = md.read_text(encoding="utf-8", errors="replace").lstrip(_V.BOM)
+    try:  # as YAML reads it: `name: my-skill  # id` is my-skill, a quoted name loses its quotes
+        name = _V._parse_frontmatter(text)[0].get("name")
+    except ValueError:  # frontmatter the validator refuses: the name line as written
+        m = re.search(r"^name:\s*(.+?)\s*$", text, re.M)
+        return m.group(1).strip("'\"") if m else None
+    return None if name is None else _V._shown(name).strip()
 
 
 def _is_link(path: Path) -> bool:

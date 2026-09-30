@@ -15,6 +15,8 @@ failed before its fix.
 Updated: 2026-09-30 17:14 ET — EleventhReview: a first move aside that fails reported as nothing changed, with the empty folder
 named or removed; the help and closing lines held to the validator tests' maintained host list in any letter case; each
 failed before its fix (the host list on a closing line naming "Cursor").
+Updated: 2026-09-30 17:42 ET — TwelfthReview: an installed name with a trailing comment is the skill's own; the help's
+--version and date rules; each failed on cdfceab.
 
 Run from the repository root:
     python -B -m unittest discover -s tests -v
@@ -1495,6 +1497,43 @@ class EleventhReview(unittest.TestCase):
             self.assertEqual(rc, 1, text)
             self.assertIn("could not be replaced (Access is denied); the old copy is back, nothing changed", text)
             self.assertEqual([p.name for p in (home / "good-skill").iterdir() if p.name.startswith(".old-")], [])
+
+
+class TwelfthReview(unittest.TestCase):
+    """The twelfth review (cdfceab): an installed copy's name is read as YAML reads it, and the help states the
+    --version and date rules SKILL.md states."""
+
+    def _run(self, *argv):
+        printed = io.StringIO()
+        with contextlib.redirect_stdout(printed):
+            rc = package_dual.main([str(a) for a in argv])
+        return rc, printed.getvalue()
+
+    def test_an_installed_name_with_a_comment_is_its_own_skill(self):
+        """Finding 6: `name: good-skill  # id` was read with the comment, so a redeploy over the skill's own installed
+        copy was refused as another skill."""
+        with tempfile.TemporaryDirectory() as tmp:
+            skill = make_skill(Path(tmp) / "src")
+            home = Path(tmp) / "home"
+            rc, text = self._run(skill, "--version", "1.0", "--output", Path(tmp) / "out", "--deploy", home)
+            self.assertEqual(rc, 0, text)
+            md = home / "good-skill" / "SKILL.md"
+            md.write_text(md.read_text(encoding="utf-8").replace("name: good-skill", "name: good-skill  # id", 1),
+                          encoding="utf-8", newline="\n")
+            self.assertEqual(package_dual._skill_name_in(home / "good-skill"), "good-skill")
+            rc, text = self._run(skill, "--version", "1.1", "--output", Path(tmp) / "out", "--deploy", home)
+            self.assertEqual(rc, 0, text)
+            for line, want in (("name: \"quoted-skill\"", "quoted-skill"), ("name: [broken", "[broken")):
+                with self.subTest(line):  # YAML's reading first; a frontmatter it refuses falls back to the line
+                    md.write_text(f"---\n{line}\ndescription: Use when asked.\n---\n", encoding="utf-8", newline="\n")
+                    self.assertEqual(package_dual._skill_name_in(home / "good-skill"), want)
+
+    def test_the_help_states_the_version_and_date_rules(self):
+        """Finding 5: the help left out --version's first and last character and its 64-character cap, and the
+        2107-12-31 clamp."""
+        doc = " ".join(package_dual.__doc__.split())
+        self.assertIn("starting and ending with a digit or letter, at most 64 characters", doc)
+        self.assertIn("one dated after 2107 is stored dated 2107-12-31", doc)
 
 
 if __name__ == "__main__":

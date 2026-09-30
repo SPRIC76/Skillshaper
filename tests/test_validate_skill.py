@@ -24,6 +24,9 @@ tag made, a list name, the Python floor, one install section; "Use before", "Use
 cues; each failed before its fix. The parity tables allow only the specification's shape errors on their values.
 Updated: 2026-09-30 17:22 ET — EleventhReview: the specification's shapes are warnings that name both forms, with --strict counting
 them, and the docs say so; the parity tables again allow no error on their values; each failed on 265fb3f.
+Updated: 2026-09-30 17:42 ET — TwelfthReview: a name that is not text is an error (with and without PyYAML); the levels'
+definitions; EleventhReview.SPEC adds a compatibility that is not text and allowed-tools advice; TenthReview's
+octal name now reads as a number; each failed on cdfceab.
 
 Run from the repository root:
     python -B -m unittest discover -s tests -v
@@ -1390,8 +1393,8 @@ class TenthReview(unittest.TestCase):
                                       "text, or a > block"])
             errors = self._check(tmp, "name", f"name: {octal}\ndescription: Use when asked.\n")
             shown = f"{_digits(int(octal, 8)):,} digits long"
-            self.assertEqual(errors, [f"name '{shown}' must be kebab-case, at most 64 characters",
-                                      f"name '{shown}' differs from its folder 'good-skill'; agents load by name"])
+            # The twelfth review: a name that is not text is named so, never stringified into the kebab-case check.
+            self.assertEqual(errors, [f"name is a number ({shown}), not text: quote it"])
             errors = self._check(tmp, "compatibility", f"name: good-skill\ndescription: Use when asked.\n"
                                                        f"compatibility: {self.BIG_HEX}\n")
             self.assertEqual(errors, ["compatibility is over 500 characters"])
@@ -1624,6 +1627,19 @@ class EleventhReview(unittest.TestCase):
                                 "Skills specification gives 1 to 500 characters, which some hosts require"),
         "compatibility-null": ("compatibility:", "compatibility is empty: "),
         "compatibility-blank": ("compatibility: '   '", "compatibility is empty: "),
+        # The twelfth review: a compatibility that is not text got no warning; allowed-tools advice built from the list.
+        "compatibility-number": ("compatibility: 3.10", "compatibility is a number (3.1): some hosts accept that, but "
+                                 "the Agent Skills specification gives 1 to 500 characters of text, which some hosts "
+                                 "require; quote it"),
+        "compatibility-false": ("compatibility: false", "compatibility is a boolean (False): "),
+        "compatibility-zero": ("compatibility: 0", "compatibility is a number (0): "),
+        "compatibility-list": ("compatibility: [py]", "compatibility is a YAML list (['py']): "),
+        "allowed-tools-list-advice": ("allowed-tools: [Read, Write]", "allowed-tools is a YAML list: some hosts accept "
+                                      "that, but the Agent Skills specification gives a space-separated string, which "
+                                      "some hosts require; write it as Read Write"),
+        "allowed-tools-number-advice": ("allowed-tools: 2", "allowed-tools is a number: some hosts accept that, but the "
+                                        "Agent Skills specification gives a space-separated string, which some hosts "
+                                        "require; write it as one space-separated string, such as Bash(git:*) Read"),
     }
 
     def _spec(self):
@@ -1744,6 +1760,54 @@ class EleventhReview(unittest.TestCase):
                     self.assertEqual(errors, [])
                     self.assertEqual(len(warnings), 1, warnings)
                     self.assertTrue(warnings[0].startswith("description says what the skill is but not when"), warnings)
+
+
+class TwelfthReview(unittest.TestCase):
+    """The twelfth review (cdfceab): a name that is not text is an error, never stringified into a passing kebab-case
+    name; and the Error and Warning definitions say what each level holds."""
+
+    NAMES = {"number": ("name: 123", "name is a number (123), not text: quote it"),
+             "date": ("name: 2026-09-30", "name is a date (2026-09-30), not text: quote it"),
+             "float": ("name: 1.5", "name is a number (1.5), not text: quote it"),
+             "boolean": ("name: yes", "name is a boolean (True), not text: quote it")}
+
+    def _names(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            for label, (line, said) in self.NAMES.items():
+                with self.subTest(label):
+                    # The folder is named as the value prints, so only the not-text rule can fail it.
+                    folder = said.split("(")[1].split(")")[0]
+                    skill = make_skill(Path(tmp) / label, name=folder,
+                                       md_bytes=f"---\n{line}\ndescription: Use when asked.\n---\n\n# Body\n".encode())
+                    errors, _ = validate_skill.check(skill)
+                    self.assertEqual(errors, [said])
+            skill = make_skill(Path(tmp) / "quoted", name="123",
+                               md_bytes=b"---\nname: '123'\ndescription: Use when asked.\n---\n\n# Body\n")
+            self.assertEqual(validate_skill.check(skill), ([], []))
+
+    def test_a_name_that_is_not_text_is_an_error_without_pyyaml(self):
+        """Finding 1: `name: 123` and `name: 2026-09-30` passed, stringified before the kebab-case check, though
+        SKILL.md says a name that is not text is an error."""
+        with without_pyyaml():
+            self._names()
+
+    @unittest.skipUnless(_has_pyyaml(), "PyYAML is not installed here")
+    def test_a_name_that_is_not_text_is_an_error_with_pyyaml(self):
+        self._names()
+
+    def test_the_levels_are_defined_by_what_they_hold(self):
+        """Finding 4: the Error and Warning definitions: errors are the specification's length limits and required
+        fields; warnings include a form the specification does not give but hosts accept; the 500-line body limit is
+        Skillshaper's own."""
+        texts = {"SKILL.md": (REPO / "sc2" / "SKILL.md").read_text(encoding="utf-8"),
+                 "README.md": (REPO / "README.md").read_text(encoding="utf-8"),
+                 "validate_skill.py": validate_skill.__doc__}
+        for name, text in texts.items():
+            flat = " ".join(text.split())
+            with self.subTest(name):
+                self.assertIn("(its length limits and required fields)", flat)
+                self.assertIn("or uses a form the specification does not give but hosts accept", flat)
+                self.assertIn("Skillshaper's own limit, stricter than the specification's recommendation", flat)
 
 
 if __name__ == "__main__":
