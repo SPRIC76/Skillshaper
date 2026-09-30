@@ -14,6 +14,7 @@ import hashlib
 import importlib.util
 import io
 import os
+import stat
 import subprocess
 import tempfile
 import unittest
@@ -73,6 +74,30 @@ def make_junction(link, real):
         return None
     r = subprocess.run(["cmd", "/c", "mklink", "/J", str(link), str(real)], capture_output=True, text=True)
     return link if r.returncode == 0 and link.exists() else None
+
+
+def make_symlink(link, real):
+    """A folder symlink; None where this account may not make one (Windows without Developer Mode)."""
+    try:
+        os.symlink(real, link, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        return None
+    return link
+
+
+@contextlib.contextmanager
+def chdir(path):
+    old = os.getcwd()
+    os.chdir(path)
+    try:
+        yield
+    finally:
+        os.chdir(old)
+
+
+def entries(archive):
+    with zipfile.ZipFile(archive) as zf:
+        return sorted(zf.namelist())
 
 
 class Deploy(unittest.TestCase):
@@ -263,6 +288,129 @@ class Deploy(unittest.TestCase):
             target = package_dual.deploy(package(skill, Path(tmp) / "out"), "good-skill", Path(tmp) / "home")
             self.assertTrue(os.stat(target / "scripts" / "run.py").st_mode & 0o100)
             self.assertFalse(os.stat(target / "SKILL.md").st_mode & 0o100)
+
+
+class ThirdReview(unittest.TestCase):
+    """The third review (f6ebd36): links inside the skill, a read-only old copy, a development copy as target."""
+
+    def _packaged(self, tmp):
+        return package(make_skill(Path(tmp) / "src", files={"scripts/run.py": "print(1)\n"}), Path(tmp) / "out")
+
+    def test_a_folder_symlink_inside_the_skill_is_packaged_like_a_junction(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            shared = Path(tmp) / "shared"
+            (shared / "guide.md").parent.mkdir(parents=True)
+            (shared / "guide.md").write_text("# Guide\n", encoding="utf-8")
+            skill = make_skill(Path(tmp) / "src", body="Read references/guide.md.")
+            if make_symlink(skill / "references", shared) is None:
+                self.skipTest("no folder symlink on this account")
+            self.assertIn("good-skill/references/guide.md", entries(package(skill, Path(tmp) / "out")))
+
+    def test_a_link_back_into_the_skill_or_to_the_output_is_not_packed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            skill = make_skill(Path(tmp) / "src")
+            out = Path(tmp) / "out"
+            out.mkdir()
+            if make_junction(skill / "loop", skill) is None or make_junction(skill / "shared", out) is None:
+                self.skipTest("no junction on this platform")
+            with contextlib.redirect_stdout(io.StringIO()):
+                for _ in range(2):
+                    self.assertEqual(package_dual.main([str(skill), "--version", "1.0", "--output", str(out)]), 0)
+            self.assertEqual(entries(out / "good-skill.skill"), ["good-skill/SKILL.md"])
+
+    def test_a_read_only_file_in_the_old_copy_is_replaced_with_nothing_left_over(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            archive = self._packaged(tmp)
+            home = Path(tmp) / "home"
+            target = make_skill(home, files={"references/locked.md": "old\n"})
+            os.chmod(target / "references" / "locked.md", stat.S_IREAD)
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                package_dual.deploy(archive, "good-skill", home)
+            self.assertEqual(sorted(p.relative_to(target).as_posix() for p in target.rglob("*") if p.is_file()),
+                             ["SKILL.md", "scripts/run.py"], out.getvalue())
+
+    def test_an_old_copy_left_by_a_lock_is_not_nested_by_the_next_deploy(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            archive = self._packaged(tmp)
+            home = Path(tmp) / "home"
+            target = make_skill(home)
+            make_skill(target / ".old-abc123", "good-skill")  # what a lock left behind, now free
+            package_dual.deploy(archive, "good-skill", home)
+            self.assertEqual(sorted(p.relative_to(target).as_posix() for p in target.rglob("*") if p.is_file()),
+                             ["SKILL.md", "scripts/run.py"])
+
+    @unittest.skipUnless(os.name == "nt", "an open file blocks removal only on Windows")
+    def test_an_old_copy_still_locked_stays_put_and_the_deploy_goes_ahead(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            archive = self._packaged(tmp)
+            home = Path(tmp) / "home"
+            target = make_skill(home)
+            (target / ".old-abc123").mkdir()
+            busy = open(target / ".old-abc123" / "busy.txt", "w", encoding="utf-8")
+            try:
+                out = io.StringIO()
+                with contextlib.redirect_stdout(out):
+                    package_dual.deploy(archive, "good-skill", home)
+                files = sorted(p.relative_to(target).as_posix() for p in target.rglob("*") if p.is_file())
+            finally:
+                busy.close()
+            self.assertEqual(files, [".old-abc123/busy.txt", "SKILL.md", "scripts/run.py"], out.getvalue())
+            self.assertIn(".old-abc123", out.getvalue())
+
+    def test_a_same_skill_target_holding_development_material_is_refused(self):
+        dev = {".git/HEAD": "ref\n", ".env": "K=1\n", "evals/e1.md": "e\n", "tests/t.py": "pass\n",
+               "scratch-workspace/notes.md": "n\n"}
+        with tempfile.TemporaryDirectory() as tmp:
+            archive = self._packaged(tmp)
+            home = Path(tmp) / "home"
+            target = make_skill(home, files=dev)
+            with self.assertRaises(RuntimeError) as cm:
+                package_dual.deploy(archive, "good-skill", home)
+            for name in (".git", ".env", "evals", "tests", "scratch-workspace"):
+                self.assertIn(name, str(cm.exception))
+            for rel in dev:
+                self.assertTrue((target / rel).is_file(), rel)
+
+    def test_caches_in_an_installed_copy_do_not_block_its_replacement(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            archive = self._packaged(tmp)
+            home = Path(tmp) / "home"
+            target = make_skill(home, files={"scripts/__pycache__/run.cpython-312.pyc": b"\x00\x01"})
+            package_dual.deploy(archive, "good-skill", home)
+            self.assertFalse((target / "scripts" / "__pycache__").exists())
+
+    def test_a_deploy_path_through_a_file_is_refused_before_packaging(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            skill = make_skill(Path(tmp) / "src")
+            (Path(tmp) / "h9").write_text("a file\n", encoding="utf-8")
+            out_dir = Path(tmp) / "out"
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                rc = package_dual.main([str(skill), "--version", "1.0", "--output", str(out_dir),
+                                        "--deploy", str(Path(tmp) / "h9" / "home")])
+            self.assertEqual(rc, 1, out.getvalue())
+            self.assertIn("is a file", out.getvalue())
+            self.assertFalse(out_dir.exists())
+
+    def test_packaging_from_inside_the_skill_writes_beside_it(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            skill = make_skill(Path(tmp) / "src")
+            out = io.StringIO()
+            with chdir(skill), contextlib.redirect_stdout(out):
+                rc = package_dual.main([".", "--version", "1.0"])
+            self.assertEqual(rc, 0, out.getvalue())
+            self.assertTrue((skill.parent / "good-skill.skill").is_file())
+            self.assertEqual([p.name for p in skill.iterdir()], ["SKILL.md"])
+
+    def test_text_without_a_listed_suffix_lands_with_lf(self):
+        files = {"LICENSE": "Freeware\nline\n", "Makefile": "all:\n\techo\n", "references/notes": "a\nb\n",
+                 "references/guide.rst": "Title\n=====\n", "scripts/tool.go": "package main\n"}
+        with tempfile.TemporaryDirectory() as tmp:
+            skill = make_skill(Path(tmp) / "src", files=files, crlf=True)
+            with zipfile.ZipFile(package(skill, Path(tmp) / "out")) as zf:
+                for rel in files:
+                    self.assertNotIn(b"\r\n", zf.read("good-skill/" + rel), rel)
 
 
 class Source(unittest.TestCase):

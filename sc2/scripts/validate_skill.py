@@ -9,6 +9,10 @@ check ignores letter case.
 Updated: 2026-09-30 04:44 ET — v1.2: "Triggers on ..." counts as a when-to-use cue; only an exact copy of
 this validator skips the marker and user-folder checks, not any file of its name; paths in
 messages use forward slashes; a dotfile the packager drops is not an orphan.
+Updated: 2026-09-30 05:25 ET — v1.3: the skill is walked as the packager reads it (links followed alike,
+a loop cut, dot-folders such as a deploy's .old-* not entered); any version of this
+validator, edited or not, is exempt by its first docstring line; c:/users/... is no
+one's user folder.
 
 Errors are what claude.ai or the Skills API would reject, or what leaves the
 skill broken: frontmatter keys and limits, a name that differs from its folder,
@@ -54,9 +58,10 @@ STALE_MARKERS = {
 }
 # One person's profile folder: breaks on every other machine and discloses the
 # account name wherever the skill is shared. Placeholders such as <you> pass.
-# Case-insensitive: Windows paths are, and shells often print c:/users/....
+# Case-insensitive: Windows paths are, and shells often print c:/users/<name>.
+# A name starts with a letter or digit, so an elided c:/users/... is no one's.
 USER_PATH = re.compile(r"(?:[A-Za-z]:[\\/]{1,2}Users[\\/]{1,2}|/Users/|/home/)"
-                       r"(?!(?:claude|Public|Default|All Users)\b)([A-Za-z0-9._-]+)", re.I)
+                       r"(?!(?:claude|Public|Default|All Users)\b)([A-Za-z0-9][A-Za-z0-9._-]*)", re.I)
 
 
 def _parse_frontmatter(text):
@@ -117,11 +122,36 @@ def _read_utf8(path, rel, errors):
 
 
 def _is_this_validator(path):
-    """This file names the markers it hunts; a copy of it is exempt, another skill's file of the same name is not."""
+    """This file names the markers it hunts; a copy of it, of any version or edited, opens with the same
+    first docstring line and is exempt; another skill's file of the same name does not and is checked."""
+    signature = __doc__.strip().splitlines()[0]
     try:
-        return path.read_bytes().replace(b"\r\n", b"\n") == Path(__file__).read_bytes().replace(b"\r\n", b"\n")
+        with open(path, encoding="utf-8", errors="replace") as f:
+            head = [f.readline().strip() for _ in range(4)]
     except OSError:
         return False
+    return signature in head
+
+
+def _tree(skill):
+    """Every path under the skill as the packager reads it: links of every kind followed
+    alike, a link back to a folder already on the way down (a loop) cut, and folders that
+    never ship (__pycache__ and the like, dot-folders such as .git or the .old-* a locked
+    deploy leaves, evals/ and tests/ at the root) listed but not entered."""
+    found = []
+
+    def walk(folder, chain, top):
+        for child in sorted(folder.iterdir()):
+            found.append(child)
+            if child.is_dir():
+                real = os.path.normcase(os.path.realpath(child))
+                if real in chain or child.name in JUNK_DIRS or child.name.startswith(".") \
+                        or (top and child.name in ROOT_SKIP_DIRS):
+                    continue
+                walk(child, chain | {real}, False)
+
+    walk(skill, frozenset({os.path.normcase(os.path.realpath(skill))}), True)
+    return found
 
 
 def _is_test_file(rel):
@@ -140,9 +170,8 @@ def check(skill_dir):
     if not md.is_file():
         return [f"{skill}: SKILL.md not found"], []
 
-    nested = [p for p in skill.rglob("SKILL.md")
-              if p != md and not (set(p.relative_to(skill).parts[:-1]) & JUNK_DIRS)
-              and p.relative_to(skill).parts[0] not in ROOT_SKIP_DIRS]
+    tree = _tree(skill)
+    nested = [p for p in tree if p.name == "SKILL.md" and p != md and p.is_file()]
     if nested:
         errors.append("more than one SKILL.md (claude.ai accepts exactly one): "
                       + ", ".join(p.relative_to(skill).as_posix() for p in nested))
@@ -197,10 +226,8 @@ def check(skill_dir):
 
     texts = {md: text}
     for d in BUNDLE_DIRS:
-        for p in (skill / d).rglob("*") if (skill / d).is_dir() else []:
+        for p in (p for p in tree if p.relative_to(skill).parts[0] == d):
             if p.is_file() and p.suffix.lower() in {".md", ".txt", ".py", ".json", ".sh", ".ps1", ".yaml", ".yml"}:
-                if set(p.relative_to(skill).parts) & JUNK_DIRS:
-                    continue
                 t = _read_utf8(p, p.relative_to(skill).as_posix(), errors)
                 if t is not None:
                     texts[p] = t
@@ -213,9 +240,8 @@ def check(skill_dir):
                 errors.append(f"{src.relative_to(skill).as_posix()} references {ref}, which does not exist")
 
     # Dotfiles (.keep, .gitignore) never reach the archive, so they cannot be orphans in it.
-    bundled = [p for d in BUNDLE_DIRS if (skill / d).is_dir() for p in (skill / d).rglob("*")
-               if p.is_file() and not (set(p.relative_to(skill).parts) & JUNK_DIRS)
-               and not any(part.startswith(".") for part in p.relative_to(skill).parts)]
+    bundled = [p for d in BUNDLE_DIRS for p in tree if p.relative_to(skill).parts[0] == d
+               and p.is_file() and not any(part.startswith(".") for part in p.relative_to(skill).parts)]
     everything = "\n".join(texts.values())
     for p in bundled:
         rel = p.relative_to(skill).as_posix()
@@ -230,7 +256,7 @@ def check(skill_dir):
             except SyntaxError as e:
                 errors.append(f"{rel} does not compile: {e}")
 
-    for p in skill.rglob("*"):
+    for p in tree:
         rel_parts = p.relative_to(skill).parts
         if rel_parts and rel_parts[0] in ROOT_SKIP_DIRS:
             continue

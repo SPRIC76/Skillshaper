@@ -66,7 +66,7 @@ python sc2/scripts/validate_skill.py <path/to/skill-folder> [--strict]
 Package (validation runs first):
 
 ```bash
-python sc2/scripts/package_dual.py <path/to/skill-folder> --version <X.Y> [--output <dir>] [--deploy <skills-folder>] [--strict]
+python sc2/scripts/package_dual.py <path/to/skill-folder> --version <X.Y> [--output <dir>] [--deploy <skills-home>] [--strict]
 ```
 
 **Example** — the skill packages itself:
@@ -82,9 +82,9 @@ Produces:
 | `dist/sc2.skill` | Upload to claude.ai or drag into Claude Desktop |
 | `dist/sc2-v1.4.zip` | Versioned archive for keeping and for manual installs |
 
-Both are zip archives with `sc2/SKILL.md` as the root entry. `evals/` and `tests/` at the skill root, `*-workspace` folders, `__pycache__`, `node_modules`, `.git`, dotfiles such as `.gitignore` and `.env`, and OS junk are left out. Text files are written with LF line endings whatever the checkout uses (`.md`, `.txt`, `.py`, `.json`, `.yaml`, `.sh`, `.js`, `.html` and the other text types listed in `TEXT_SUFFIXES`, and any script that starts with `#!`); every other file stays byte-for-byte, a PDF or a calendar file included. Write the archives outside the skill folder: an `--output` inside it is refused.
+Both are zip archives with `sc2/SKILL.md` as the root entry. `evals/` and `tests/` at the skill root, `*-workspace` folders, `__pycache__`, `node_modules`, `.git`, dotfiles such as `.gitignore` and `.env`, and OS junk are left out. A folder or file reached through a junction or symlink is packaged like any other; a link loop, or a link out to the archives, is not followed. Text files are written with LF line endings whatever the checkout uses (`.md`, `.txt`, `.py`, `.json`, `.yaml`, `.sh`, `.js`, `.html`, `.rst`, `.go` and the other text types listed in `TEXT_SUFFIXES`, a file with no suffix that holds UTF-8 text such as `LICENSE`, and any script that starts with `#!`); every other file stays byte-for-byte, a PDF or a calendar file included. The archives go outside the skill folder: run from inside it, they land beside it; an `--output` inside it is refused.
 
-`--deploy ~/.agents/skills` also installs the packaged skill into `~/.agents/skills/sc2/`, replacing that folder's contents in place — only when the folder is absent, empty, or holds a `SKILL.md` naming the same skill. Anything else (another skill, a folder of other files, a file, a symlink or junction, or the very folder being packaged) is refused with a message and nothing changes. The replacement lands whole or the old copy is put back.
+`--deploy ~/.agents/skills` also installs the packaged skill into `~/.agents/skills/sc2/`, replacing that folder's contents in place — only when the folder is absent, empty, or an installed copy of the same skill. Anything else (another skill, a folder of other files, a file, a symlink or junction, the very folder being packaged, or a working copy holding `.git`, `.env`, `tests/` or anything else the package leaves out) is refused before anything is built, and nothing changes. The replacement lands whole or the old copy is put back; read-only files in the old copy are replaced too.
 
 ## Tests
 

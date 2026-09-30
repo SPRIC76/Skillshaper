@@ -14,6 +14,7 @@ import importlib.util
 import io
 import os
 import re
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -256,6 +257,46 @@ class SecondReview(unittest.TestCase):
             skill = make_skill(tmp, files={"scripts/.keep": ""})
             _, warnings = validate_skill.check(skill)
             self.assertFalse([w for w in warnings if "orphan" in w], warnings)
+
+
+class ThirdReview(unittest.TestCase):
+    """The third review (f6ebd36): what a failed deploy leaves, an older copy of this validator, a dotted path."""
+
+    def test_a_skill_md_inside_a_dot_folder_is_not_a_nested_skill(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            skill = make_skill(tmp, files={".old-abc123/SKILL.md": "# the copy a locked file kept\n",
+                                           ".git/SKILL.md": "# not ours\n"})
+            errors, _ = validate_skill.check(skill)
+            self.assertFalse([e for e in errors if "more than one SKILL.md" in e], errors)
+
+    def test_an_edited_or_older_copy_of_this_validator_is_exempt(self):
+        own = Path(validate_skill.__file__).read_text(encoding="utf-8")
+        with tempfile.TemporaryDirectory() as tmp:
+            skill = make_skill(tmp, body="Run scripts/validate_skill.py first.",
+                               files={"scripts/validate_skill.py": own + "\n# a local note\n"})
+            _, warnings = validate_skill.check(skill)
+            self.assertFalse([w for w in warnings if "validate_skill.py" in w], warnings)
+
+    def test_a_link_loop_is_walked_once(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            skill = make_skill(tmp)
+            link = skill / "loop"
+            if os.name == "nt":
+                r = subprocess.run(["cmd", "/c", "mklink", "/J", str(link), str(skill)], capture_output=True)
+                made = r.returncode == 0
+            else:
+                os.symlink(skill, link, target_is_directory=True)
+                made = True
+            if not made:
+                self.skipTest("no junction on this platform")
+            errors, _ = validate_skill.check(skill)
+            self.assertEqual(errors, [])
+
+    def test_dots_after_users_are_not_a_user_folder(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            skill = make_skill(tmp, body="Paths look like c:/users/.... or C:\\Users\\...\\x.")
+            _, warnings = validate_skill.check(skill)
+            self.assertFalse([w for w in warnings if "user folder" in w], warnings)
 
 
 if __name__ == "__main__":

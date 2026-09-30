@@ -11,8 +11,13 @@ the target as a link, and lands whole or puts the old copy back; a skill reached
 link keeps the link's name; archives are never written inside the skill; only known text
 is rewritten with LF (a PDF or calendar file stays byte-for-byte); deployed scripts keep
 their executable bit.
+Updated: 2026-09-30 05:25 ET — v1.4: links of every kind are followed alike, a loop or a link out to
+the archives cut; deploy clears a read-only file, never nests an old copy still in use,
+and refuses a working copy (.git, .env, tests/ ...) before anything is built, as it does
+a --deploy path through a file; run inside the skill, the archives go beside it; a file
+with no suffix that holds UTF-8 text is written with LF.
 
-  {name}.skill        what claude.ai and the Claude desktop app install: upload it
+  {name}.skill       what claude.ai and the Claude desktop app install: upload it
                       in the skill settings, or open the file card an agent presents
   {name}-v{X.Y}.zip   the same archive, versioned, for keeping and for local agents:
                       extract so the folder lands at ~/.agents/skills/{name}/
@@ -20,24 +25,29 @@ their executable bit.
 Both hold {name}/SKILL.md at the root. validate_skill.py (beside this file) runs
 first; any error stops packaging. Left out: evals/ and tests/ at the skill root,
 *-workspace folders, __pycache__, node_modules, .git, .pytest_cache, *.pyc, dotfiles
-(.gitignore, .env, .github/), OS junk. Text files (TEXT_SUFFIXES, or a script that
-starts with #!) are written with LF line endings whatever the checkout uses; every
-other file stays byte-for-byte; a script with a shebang is stored executable. The
-archives are written outside the skill folder (--output inside it is refused).
+(.gitignore, .env, .github/), OS junk. Links of every kind are followed alike; a link
+back to a folder already on the way (a loop) or out to the archives is cut. Text files
+(TEXT_SUFFIXES, a file with no suffix holding UTF-8 text, or a script that starts with
+#!) are written with LF line endings whatever the checkout uses; every other file
+stays byte-for-byte; a script with a shebang is stored executable. The archives are
+written outside the skill folder: beside it when run inside it, and an --output
+inside it is refused.
 
 --deploy HOME also replaces the contents of HOME/{name}/ with exactly what was
-packaged, only when that folder is absent, empty, or holds a SKILL.md naming this
-same skill; anything else (another skill, a folder of other files, a file, a symlink
-or junction, the very folder being packaged) is refused with a message and nothing
-changes. The replacement lands whole or the old copy is put back. The folder itself
-stays, so a junction or symlink an agent uses to reach it keeps working; a link
-inside it is removed as a link, never followed.
+packaged, only when that folder is absent, empty, or an installed copy of this same
+skill; anything else (another skill, a folder of other files, a file, a symlink or
+junction, the very folder being packaged, a working copy holding what the package
+leaves out) is refused before anything is built, and nothing changes. The replacement
+lands whole or the old copy is put back. The folder itself stays, so a junction or
+symlink an agent uses to reach it keeps working; a link inside it is removed as a
+link, never followed.
 
 Usage:
     python package_dual.py <skill-folder> --version <X.Y> [--output <dir>] [--deploy <skills-home>] [--strict]
 """
 
 import argparse
+import codecs
 import fnmatch
 import importlib.util
 import os
@@ -53,12 +63,21 @@ EXCLUDE_DIRS = {"__pycache__", "node_modules", ".git", ".pytest_cache"}
 ROOT_EXCLUDE_DIRS = {"evals", "tests"}
 EXCLUDE_GLOBS = {"*.pyc"}
 EXCLUDE_FILES = {".DS_Store", "Thumbs.db"}
+# Regenerated on the next run: an installed copy may hold them and still be replaced.
+CACHES = {"__pycache__", ".pytest_cache", "node_modules"}
 # Written with LF line endings whatever the checkout uses; so is a script that starts
-# with #!. Everything else is stored byte-for-byte: a binary need not hold a NUL byte
+# with #!, and a file with no suffix that holds UTF-8 text (LICENSE, Makefile).
+# Everything else is stored byte-for-byte: a binary need not hold a NUL byte
 # (a PDF's xref offsets count its CRLFs), and some text must keep CRLF (.ics, .bat).
-TEXT_SUFFIXES = {".md", ".txt", ".py", ".json", ".yaml", ".yml", ".sh", ".ps1",
-                 ".js", ".mjs", ".cjs", ".ts", ".jsx", ".tsx", ".css", ".html",
-                 ".xml", ".svg", ".csv", ".toml", ".ini", ".cfg", ".sql", ".rb", ".pl"}
+TEXT_SUFFIXES = {".md", ".markdown", ".mdx", ".rst", ".adoc", ".tex", ".bib", ".txt",
+                 ".json", ".jsonl", ".ndjson", ".ipynb", ".yaml", ".yml", ".toml", ".ini", ".cfg",
+                 ".conf", ".properties", ".csv", ".tsv", ".xml", ".svg", ".html", ".htm",
+                 ".css", ".scss", ".sass", ".less", ".sql", ".graphql", ".gql", ".proto",
+                 ".py", ".sh", ".bash", ".zsh", ".fish", ".ps1", ".psm1",
+                 ".js", ".mjs", ".cjs", ".ts", ".mts", ".cts", ".jsx", ".tsx", ".vue", ".svelte",
+                 ".rb", ".pl", ".pm", ".php", ".lua", ".r", ".jl", ".go", ".rs", ".java",
+                 ".kt", ".kts", ".scala", ".swift", ".c", ".h", ".cc", ".cpp", ".hpp", ".cs",
+                 ".dart", ".ex", ".exs", ".erl", ".hs", ".ml", ".clj", ".tf", ".hcl", ".gradle"}
 
 
 def _say(text=""):
@@ -93,7 +112,19 @@ def should_exclude(rel_path: Path) -> bool:
 
 
 def _is_text(path: Path, head: bytes) -> bool:
-    return path.suffix.lower() in TEXT_SUFFIXES or (head.startswith(b"#!") and b"\0" not in head)
+    if path.suffix.lower() in TEXT_SUFFIXES:
+        return True
+    if b"\0" in head:
+        return False
+    if head.startswith(b"#!"):
+        return True
+    if path.suffix:
+        return False  # a suffix not listed stays byte-for-byte
+    try:
+        codecs.getincrementaldecoder("utf-8")().decode(head)  # not final: head may cut a character
+    except UnicodeDecodeError:
+        return False
+    return True
 
 
 def _inside(path, folder) -> bool:
@@ -102,15 +133,45 @@ def _inside(path, folder) -> bool:
     return p == f or p.startswith(f.rstrip(os.sep) + os.sep)
 
 
+def _files(skill_path: Path, out=None):
+    """Every file the package holds, links of every kind (junction, folder or file symlink)
+    followed alike. Cut: a link back to a folder already on the way down (a loop), and a
+    link that leaves the skill to reach the archives: the output folder, a folder above
+    it, or, when the archives are written beside the skill, a file in that folder.
+    Excluded folders (.git, node_modules, tests/ ...) are not entered."""
+    root = os.path.realpath(skill_path)
+    beside = out is not None and _inside(root, out)
+    found = []
+
+    def cut(real, is_dir):
+        if out is None or _inside(real, root):
+            return False
+        if _inside(out, real):
+            return True
+        if beside:  # a sibling folder is fair; a file lying next to the archives is not
+            return not is_dir and os.path.normcase(os.path.dirname(real)) == os.path.normcase(os.path.realpath(out))
+        return _inside(real, out)
+
+    def walk(folder: Path, chain):
+        for child in sorted(folder.iterdir()):
+            rel = child.relative_to(skill_path.parent)
+            real = os.path.realpath(child)
+            if child.is_dir():
+                key = os.path.normcase(real)
+                if key not in chain and not should_exclude(rel / "_") and not cut(real, True):
+                    walk(child, chain | {key})
+            elif child.is_file() and not should_exclude(rel) and not cut(real, False):
+                found.append(child)
+
+    walk(skill_path, frozenset({os.path.normcase(root)}))
+    return found
+
+
 def create_zip(skill_path: Path, output_path: Path) -> int:
     count = 0
     with zipfile.ZipFile(output_path, "w", zipfile.ZIP_DEFLATED) as zf:
-        for file_path in sorted(skill_path.rglob("*")):
-            if not file_path.is_file():
-                continue
+        for file_path in _files(skill_path, output_path.parent):
             arcname = file_path.relative_to(skill_path.parent)
-            if should_exclude(arcname):
-                continue
             data = file_path.read_bytes()
             info = zipfile.ZipInfo.from_file(file_path, arcname.as_posix())
             info.compress_type = zipfile.ZIP_DEFLATED
@@ -146,13 +207,73 @@ def _is_link(path: Path) -> bool:
 
 
 def _remove(path: Path):
-    """A file, a link (never what it points at) or a folder of them; nothing is followed."""
+    """A file, a link (never what it points at) or a folder of them; nothing is followed.
+    A read-only file, which Windows will not delete, has the flag cleared first."""
     if _is_link(path) or not path.is_dir():
-        path.unlink()  # on Windows this removes a junction or folder symlink itself
+        try:
+            path.unlink()  # on Windows this removes a junction or folder symlink itself
+        except PermissionError:
+            if _is_link(path):
+                raise  # chmod would follow the link to what it points at
+            os.chmod(path, stat.S_IWRITE | stat.S_IREAD)
+            path.unlink()
         return
     for child in path.iterdir():
         _remove(child)
     path.rmdir()
+
+
+def _left_out(target: Path, skill_name: str):
+    """What an existing copy holds that the package leaves out, caches and junk aside:
+    the marks of a working copy (.git, .env, tests/, evals/, a *-workspace)."""
+    found = []
+
+    def walk(folder: Path):
+        for child in sorted(folder.iterdir()):
+            name = child.name
+            if name in CACHES or name in EXCLUDE_FILES or name.endswith(".pyc") \
+                    or (folder == target and name.startswith(".old-")):
+                continue
+            rel = Path(skill_name) / child.relative_to(target)
+            is_dir = child.is_dir() and not _is_link(child)
+            if should_exclude(rel / "_" if is_dir else rel):
+                found.append(child.relative_to(target).as_posix() + ("/" if is_dir else ""))
+            elif is_dir:
+                walk(child)
+
+    walk(target)
+    return found
+
+
+def _refusal(skill_name: str, home: Path, source=None):
+    """Why deploying skill_name into home would harm something, or None when it is safe."""
+    for p in (home, *home.parents):
+        if p.exists():
+            if not p.is_dir():
+                return f"{home} is not a folder" if p == home else f"{p} is a file, so {home} cannot be made"
+            break
+    target = home / skill_name
+    if _is_link(target):
+        return f"{target} is a link; deploy to the folder it points at instead"
+    if target.exists() and not target.is_dir():
+        return f"{target} is a file, not a skill folder"
+    # A skill developed in place under its skills home is the very folder being
+    # packaged: replacing it would delete everything the archive leaves out.
+    if source is not None and (_inside(target, source) or _inside(source, target)):
+        return f"{target} is the folder being packaged; deploy to another skills home"
+    # Replace only what is absent, empty, or an installed copy of this same skill:
+    # one wrong --deploy argument must never empty somebody's other files.
+    if target.is_dir() and any(not c.name.startswith(".old-") for c in target.iterdir()):
+        existing = _skill_name_in(target)
+        if existing != skill_name:
+            held = f"holds the skill '{existing}'" if existing else "holds files that are not a skill (no SKILL.md)"
+            return f"{target} {held}, not '{skill_name}'"
+        kept = _left_out(target, skill_name)
+        if kept:
+            shown = ", ".join(kept[:8]) + (f" and {len(kept) - 8} more" if len(kept) > 8 else "")
+            return (f"{target} holds {shown}, which the package leaves out: it is a working copy, and "
+                    "replacing it would delete them; deploy to a skills home of installed copies")
+    return None
 
 
 def _unpack(archive: Path, skill_name: str, target: Path):
@@ -171,34 +292,31 @@ def _unpack(archive: Path, skill_name: str, target: Path):
 
 
 def deploy(archive: Path, skill_name: str, home: Path, source=None) -> Path:
+    why = _refusal(skill_name, home, source)
+    if why:
+        raise RuntimeError(f"{why}; nothing changed")
     target = home / skill_name
-    if home.exists() and not home.is_dir():
-        raise RuntimeError(f"{home} is not a folder; nothing changed")
-    if _is_link(target):
-        raise RuntimeError(f"{target} is a link; deploy to the folder it points at instead")
-    if target.exists() and not target.is_dir():
-        raise RuntimeError(f"{target} is a file, not a skill folder; nothing changed")
-    # A skill developed in place under its skills home is the very folder being
-    # packaged: replacing it would delete everything the archive leaves out.
-    if source is not None and (_inside(target, source) or _inside(source, target)):
-        raise RuntimeError(f"{target} is the folder being packaged; deploy to another skills home "
-                           "or package from a copy; nothing changed")
-    # Replace only what is absent, empty, or this same skill: one wrong --deploy
-    # argument must never empty a folder of somebody's other files.
-    if target.is_dir() and any(target.iterdir()):
-        existing = _skill_name_in(target)
-        if existing != skill_name:
-            held = f"holds the skill '{existing}'" if existing else "holds files that are not a skill (no SKILL.md)"
-            raise RuntimeError(f"{target} {held}, not '{skill_name}'; nothing changed")
     created = not target.exists()
-    target.mkdir(parents=True, exist_ok=True)
+    try:
+        target.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        raise RuntimeError(f"{target} could not be made ({e}); nothing changed") from e
+    # An old copy an earlier deploy could not remove goes now, or, still in use,
+    # stays where it is: it is never moved inside the next one.
+    stale = []
+    for child in sorted(target.iterdir()):
+        if child.name.startswith(".old-") and child.is_dir() and not _is_link(child):
+            try:
+                _remove(child)
+            except OSError:
+                stale.append(child)
     # Move the old copy aside inside the folder, unpack, then drop it: the
     # replacement lands whole, or every old file goes back where it was.
     aside = Path(tempfile.mkdtemp(prefix=".old-", dir=target))
     moved, unpacking = [], False
     try:
         for child in sorted(target.iterdir()):
-            if child != aside:
+            if child != aside and child not in stale:
                 child.rename(aside / child.name)
                 moved.append(child.name)
         unpacking = True
@@ -207,7 +325,7 @@ def deploy(archive: Path, skill_name: str, home: Path, source=None) -> Path:
         try:
             if unpacking:
                 for child in list(target.iterdir()):
-                    if child != aside:
+                    if child != aside and child not in stale:
                         _remove(child)
             for n in moved:
                 (aside / n).rename(target / n)
@@ -222,6 +340,8 @@ def deploy(archive: Path, skill_name: str, home: Path, source=None) -> Path:
         _remove(aside)
     except OSError as e:
         _say(f"⚠️ Deployed, but the old copy could not be removed ({e}); delete {aside} when it is free")
+    for s in stale:
+        _say(f"⚠️ {s} is an old copy from an earlier deploy, still in use; delete it when it is free")
     return target
 
 
@@ -229,7 +349,8 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description="Dual skill packager (.skill + versioned .zip)")
     ap.add_argument("skill_folder")
     ap.add_argument("--version", "-v", required=True, help="e.g. 1.1")
-    ap.add_argument("--output", "-o", default=".", help="output directory")
+    ap.add_argument("--output", "-o",
+                    help="output directory (default: the current one, or beside the skill when run inside it)")
     ap.add_argument("--deploy", metavar="SKILLS_HOME", help="also install into SKILLS_HOME/<name>/")
     ap.add_argument("--strict", action="store_true", help="treat validator warnings as errors")
     args = ap.parse_args(argv)
@@ -240,15 +361,22 @@ def main(argv=None):
     if not skill_path.is_dir():
         _say(f"❌ Not a directory: {skill_path}")
         return 1
-    out = Path(args.output).resolve()
-    if _inside(out, skill_path):
-        _say(f"❌ --output {out} is inside the skill folder, so the archives would pack themselves; "
-             f"write them outside it, e.g. --output {skill_path.parent / 'dist'}. Nothing packaged.")
-        return 1
+    if args.output is None:
+        out = Path.cwd().resolve()
+        if _inside(out, skill_path):
+            out = skill_path.parent.resolve()  # run inside the skill: the archives go beside it
+    else:
+        out = Path(args.output).resolve()
+        if _inside(out, skill_path):
+            _say(f"❌ --output {out} is inside the skill folder, so the archives would pack themselves; "
+                 f"write them outside it, e.g. --output {skill_path.parent / 'dist'}. Nothing packaged.")
+            return 1
     home = Path(args.deploy).expanduser().resolve() if args.deploy else None
-    if home is not None and home.exists() and not home.is_dir():
-        _say(f"❌ Deploy refused: {home} is not a folder. Nothing packaged.")
-        return 1
+    if home is not None:  # asked before anything is built; deploy() asks again at the moment it acts
+        why = _refusal(skill_path.name, home, source=skill_path)
+        if why:
+            _say(f"❌ Deploy refused: {why}. Nothing packaged.")
+            return 1
 
     errors, warnings = _validator().check(skill_path)
     for e in errors:
