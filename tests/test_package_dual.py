@@ -9,6 +9,9 @@ such files; a skills home that takes no new folder, refused before anything is b
 the .zip badly; each failed before its fix. The READONLY guard's docstring says it is a guard, not a failed-first test.
 Updated: 2026-09-30 15:37 ET — NinthReview: a skills home under a folder that takes no new folder, the probe asked once and named
 when it cannot be removed, a deploy failure's reason in words; the date lines' new form; each failed before its fix.
+Updated: 2026-09-30 16:43 ET — TenthReview: a skills home on a drive that does not exist, refused before anything is built; a
+first deploy's empty aside folder named as that, not as an old copy; the help and closing lines naming no host; each
+failed before its fix.
 
 Run from the repository root:
     python -B -m unittest discover -s tests -v
@@ -1327,6 +1330,73 @@ class NinthReview(unittest.TestCase):
             self.assertIn("Deployed, but the old copy could not be removed (Access is denied); delete ", text)
             self.assertNotIn("[Errno", text)
             self.assertNotIn("[WinError", text)
+
+
+class TenthReview(unittest.TestCase):
+    """The tenth review (71b15bb): a skills home with no folder above it at all is refused before anything is built;
+    a first deploy's empty aside folder is never called an old copy; the closing lines assume no host."""
+
+    def _run(self, *argv):
+        printed = io.StringIO()
+        with contextlib.redirect_stdout(printed):
+            rc = package_dual.main([str(a) for a in argv])
+        return rc, printed.getvalue()
+
+    @unittest.skipUnless(os.name == "nt", "every POSIX path has / above it")
+    def test_a_skills_home_on_a_drive_that_does_not_exist_is_refused_before_anything_is_built(self):
+        """F3: the walk up from Q:/nohome ended on Q:/, which is not there; nothing was probed, both archives were
+        built, and the deploy then failed with "nothing changed"."""
+        free = [c for c in "QRSTUVWXYZJKLMNOP" if not Path(f"{c}:/").exists()]
+        if not free:
+            self.skipTest("no free drive letter")
+        home = Path(f"{free[0]}:/nohome")
+        with tempfile.TemporaryDirectory() as tmp:
+            skill = make_skill(Path(tmp) / "src")
+            out = Path(tmp) / "out"
+            rc, text = self._run(skill, "--version", "1.0", "--output", out, "--deploy", home)
+            self.assertEqual(rc, 1, text)
+            where = Path(f"{free[0]}:/")
+            self.assertIn(f"❌ Deploy refused: {home.resolve()} could not be made: no folder above it exists ({where} is "
+                          "not there). Nothing packaged.", text)
+            self.assertNotIn("nothing changed", text)
+            self.assertFalse(out.exists())
+
+    def test_a_first_deploys_empty_aside_folder_is_not_called_an_old_copy(self):
+        """F5: on a first deploy nothing is moved aside, yet an aside folder that could not be removed was reported
+        as "the old copy ... when it is free" though the cause was a denied permission."""
+        real = package_dual._remove
+
+        def refusing(path):
+            if Path(path).name.startswith(".old-"):
+                raise PermissionError(13, "Access is denied", str(path))
+            return real(path)
+        with tempfile.TemporaryDirectory() as tmp:
+            skill = make_skill(Path(tmp) / "src")
+            home = Path(tmp) / "home"
+            home.mkdir()
+            package_dual._remove = refusing
+            try:
+                rc, text = self._run(skill, "--version", "1.0", "--output", Path(tmp) / "out", "--deploy", home)
+            finally:
+                package_dual._remove = real
+            self.assertEqual(rc, 0, text)
+            aside = [p for p in (home / "good-skill").iterdir() if p.name.startswith(".old-")]
+            self.assertEqual(len(aside), 1, aside)
+            self.assertIn(f"⚠️ Deployed, but the empty folder {aside[0]} could not be removed (Access is denied); "
+                          "delete it", text)
+            self.assertNotIn("old copy", text)
+
+    def test_the_closing_lines_and_the_help_assume_no_host(self):
+        """Owner, 2026-09-30: the messages name no host and assume no skills folder; 1.4 at 71b15bb said
+        "upload in claude.ai skill settings" and "extract to ~/.agents/skills/"."""
+        with tempfile.TemporaryDirectory() as tmp:
+            rc, text = self._run(make_skill(Path(tmp) / "src"), "--version", "1.0", "--output", Path(tmp) / "out")
+        self.assertEqual(rc, 0, text)
+        helped = package_dual.__doc__ + text
+        for host in ("claude", "Claude", "~/.agents", "cursor", "codex"):
+            self.assertNotIn(host, helped)
+        self.assertIn(".zip   → keep; extract it into your agent's skills folder so it lands as <skills-folder>/good-skill/",
+                      text)
 
 
 if __name__ == "__main__":

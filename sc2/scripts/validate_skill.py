@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Skill validator — the base skill-creator's upload rules plus Skillshaper's (sc2) standards.
+Skill validator — the upload rules plus Skillshaper's (sc2) standards.
 validate_skill.py v1.0 | 2026-09-15
 Updated: 2026-09-30 04:02 ET — v1.1: '.' validates under its own folder name; ./-prefixed paths are
 checked; a file that is not UTF-8 is an ERROR line and a BOM a warning; test files are
@@ -49,15 +49,23 @@ empty list item or flow value, an indentless block list, a comment after a block
 refused as PyYAML refuses it); it runs in linear time without recursion, within a size cap; a mapping nested
 deeper than one level is now refused by name; a key YAML types (on, yes, 1, ~) and a list or mapping
 description are named as YAML types them; the U+2028 and U+2029 escapes are written by name.
+Updated: 2026-09-30 16:43 ET — v1.10: a number past Python's 4,300-digit limit for printing is shown by its size, so
+check() ends on an ERROR line, never a traceback; with PyYAML, a tag it cannot build (!!bool maybe, an
+empty !!int) is an ERROR line naming what failed; the reserved-character message quotes one character,
+the tab message says the reader takes no tab anywhere, and a BOM and a line break YAML reads each get one
+sentence; the subset below names the key characters and cap, no tab, and one-line list items; the
+messages and help name no host (the Agent Skills format is for any agent).
 
-Errors are what claude.ai or the Skills API would reject, or what leaves the
+Errors are what an upload of the Agent Skills format would reject, or what leaves the
 skill broken: frontmatter keys and limits (and frontmatter that is not valid YAML,
 read by PyYAML when it is installed; without it, the built-in reader reads this subset
 and refuses the rest by name with the way to write it, or pip install pyyaml -
-key: value values plain, single- or double-quoted, on one line or continued on indented
-lines; > and | blocks with chomping and indent indicators; flow lists and flow mappings
-of such values; block lists at the key's indent or indented; one level of nested mapping;
-comments, empty values and null forms; values typed as PyYAML types them), a key YAML
+key: value values, the key of letters, digits, _ and - (or quoted without escapes), up to
+128 characters, the value plain, single- or double-quoted, on one line or continued on
+indented lines; > and | blocks with chomping and indent indicators; flow lists and flow
+mappings of such values; block lists of one-line items at the key's indent or indented;
+one level of nested mapping; comments, empty values and null forms; no tab anywhere;
+values typed as PyYAML types them), a key YAML
 types as a boolean, number or null, a name that differs from its folder, a description that is not text,
 angle brackets in the description, a body over 500 lines, a referenced file that
 does not exist or is a dotfile the package leaves out (bare or ./-prefixed, in SKILL.md and in
@@ -152,9 +160,9 @@ _HEX = set("0123456789abcdefABCDEF")
 REF_PATTERN = re.compile(r"(?<![\w/.-])(?:\./)?((?:references|scripts|assets)/[\w.\-/]*[\w])")
 WHEN_CUE = re.compile(r"\b(use (this skill )?(when|whenever|for|to)|trigger(s|ed)?|apply when|invoke when)\b", re.I)
 STALE_MARKERS = {
-    "/mnt/skills": "a claude.ai sandbox path that other surfaces do not have",
-    "/mnt/user-data": "a claude.ai sandbox path that other surfaces do not have",
-    "/home/claude": "a claude.ai sandbox path that other surfaces do not have",
+    "/mnt/skills": "a hosted sandbox's path that other surfaces do not have",
+    "/mnt/user-data": "a hosted sandbox's path that other surfaces do not have",
+    "/home/claude": "a hosted sandbox's path that other surfaces do not have",
     "str_replace": "a tool name only some surfaces use; say 'edit in place'",
 }
 # One person's profile folder: breaks on every other machine and discloses the
@@ -188,10 +196,13 @@ def _parse_frontmatter(text):
     else:
         try:
             data = yaml.safe_load(raw)
-        except yaml.YAMLError as e:  # what claude.ai would refuse too: one ERROR line, not a traceback
+        except yaml.YAMLError as e:  # what an upload would refuse too: one ERROR line, not a traceback
             raise ValueError(f"frontmatter is not valid YAML: {' '.join(str(e).split())}") from None
         except (ValueError, TypeError, OverflowError, RecursionError) as e:  # a date or number YAML cannot make
             raise ValueError(f"frontmatter is not valid YAML: {' '.join(str(e).split())}") from None
+        except Exception as e:  # a tag PyYAML cannot build (!!bool maybe, an empty !!int): named, as the built-in path does
+            raise ValueError(f"frontmatter is not valid YAML: PyYAML could not build a value from it "
+                             f"({type(e).__name__}); check any !! tag, or drop it") from None
     if not isinstance(data, dict):
         raise ValueError("frontmatter must be a YAML mapping of name, description and the other keys")
     return data, body
@@ -230,6 +241,19 @@ def _kind(value):
     if isinstance(value, dict):
         return "a mapping"
     return type(value).__name__
+
+
+def _shown(value):
+    """A frontmatter value as a message shows it: str(value), or, for a number past Python's 4,300-digit limit
+    for printing (hex, octal and sexagesimal numbers are built past it), its size instead of its digits."""
+    try:
+        return str(value)
+    except ValueError:
+        if not isinstance(value, int):
+            return "too long to show"
+        n = abs(value)
+        digits = max(1, int(n.bit_length() * 0.30102999566398120))  # log10(2): the count, or one short
+        return f"{digits + (n >= 10 ** digits):,} digits long"
 
 
 def _resolve(text, what):
@@ -319,16 +343,20 @@ def _screen(raw):
         if not before.strip(" "):
             raise ValueError(f"frontmatter {where} starts with a tab, which YAML does not take as indentation (and "
                              "the built-in reader takes no tab); use spaces")
-        raise _refused(where, "holds a tab (YAML refuses one in a plain value or an indent)",
-                       "use spaces, or \\t inside double quotes")
+        # Not "YAML refuses": YAML reads a tab inside quotes, a block or a comment; this reader takes none.
+        raise ValueError(f"frontmatter {where} holds a tab, which the built-in reader does not take (it takes no tab "
+                         "anywhere); use spaces, or \\t inside double quotes, or install PyYAML (pip install pyyaml)")
     if ch == "\r":
         raise _refused(where, "holds a carriage return without a line feed", "save the file with LF or CRLF line ends")
-    names = {"\N{LINE SEPARATOR}": "a Unicode line separator (U+2028)",
-             "\N{PARAGRAPH SEPARATOR}": "a Unicode paragraph separator (U+2029)",
-             "\x85": "a next-line control character (U+0085)", BOM: "a byte-order mark (U+FEFF)"}
-    if ch in names:
-        raise _refused(where, f"holds {names[ch]}, which YAML reads as a line break or not at all",
-                       "remove it, or write it as an escape inside double quotes (\\L, \\P, \\N, \\uFEFF)")
+    if ch == BOM:  # PyYAML keeps one inside a value as text
+        raise _refused(where, "holds a byte-order mark (U+FEFF)", "remove it, or write it as \\uFEFF inside double quotes")
+    breaks = {"\N{LINE SEPARATOR}": ("a Unicode line separator, U+2028", "\\L"),
+              "\N{PARAGRAPH SEPARATOR}": ("a Unicode paragraph separator, U+2029", "\\P"),
+              "\x85": ("a next-line control character, U+0085", "\\N")}
+    if ch in breaks:
+        name, escape = breaks[ch]
+        raise _refused(where, f"holds a line break YAML reads ({name})",
+                       f"remove it, or write it as {escape} inside double quotes")
     raise _invalid(f"{where} holds the character U+{ord(ch):04X}, which YAML does not take in a document; remove it, "
                    "or write it as an escape inside double quotes")
 
@@ -338,11 +366,14 @@ class _Reader:
     (every line and character is read a bounded number of times; nothing recurses past one nested mapping).
 
     Taken: top-level key: value lines (a plain key of letters, digits, _ and -, or a quoted key without
-    escapes); plain, single- and double-quoted values, on the key's line or the lines below it, continued
-    on lines indented past the key; > and | blocks with their chomping and indent indicators and a comment
-    after the header; one-line or continued [lists] and {maps} of scalars; block lists of one-line scalar
-    items, at the key's own indent or indented; one level of nested mapping holding the same values;
-    comments; empty values and ~, null, and typed values as PyYAML types them.
+    escapes, up to 128 characters); plain, single- and double-quoted values, on the key's line or the lines
+    below it, continued on lines indented past the key; > and | blocks with their chomping and indent
+    indicators and a comment after the header, the header on the key's line; one-line or continued [lists]
+    and {maps} of scalars, each map entry a key: value pair; block lists of one-line scalar items, at the
+    key's own indent or indented; one level of nested mapping holding the same values; comments; empty
+    values and ~, null, and typed values as PyYAML types them. It takes no tab anywhere, not even inside
+    quotes, a block or a comment (_screen). Among what it refuses by name: a key such as x.y:, ~: or one
+    holding a space, {a}, and a quote continued at column 0 (not indented past its key).
 
     Everything else is a ValueError whose message starts with "frontmatter" and names the shape: what YAML
     refuses (PyYAML refuses it too) or what lies outside the subset (install PyYAML to read it). The
@@ -555,7 +586,7 @@ class _Reader:
         """A plain value must not open with a character YAML reserves (N3: `code`, @, %, - , a lone |)."""
         ch, nxt = v[0], v[1:2]
         if ch in "`@%,]}|>" or (ch in "-?:" and nxt in ("", " ")):
-            raise _invalid(f"the value of {label} starts with {ch}{nxt.strip()}, which YAML reserves at the start of "
+            raise _invalid(f"the value of {label} starts with '{ch}', which YAML reserves at the start of "
                            "a plain value; quote the value")
         if ch in "?:":
             raise _unsupported(label, f"a plain value that starts with {ch}", "quote the value")
@@ -904,8 +935,9 @@ def _read_utf8(path, rel, errors):
 
 
 # Every released version opens its docstring with this line; only the owner's name in it has changed
-# (1.1: "plus sc2's standards."), and a copy may start the docstring on the opening quotes' line.
-_SIGNATURE = re.compile(r"^(?:\"\"\"|''')?\s*Skill validator — the base skill-creator's upload rules plus "
+# (1.1: "plus sc2's standards."), and the words before "upload rules" (1.4's tenth review dropped the base
+# workflow's name), and a copy may start the docstring on the opening quotes' line.
+_SIGNATURE = re.compile(r"^(?:\"\"\"|''')?\s*Skill validator — the (?:base [\w-]+'s )?upload rules plus "
                         r".{1,40} standards\.$")
 
 
@@ -1002,7 +1034,7 @@ def check(skill_dir, out=None):
     tree = _tree(skill, out, errors)
     nested =[p for p in tree if p.name == "SKILL.md" and p != md and p.is_file()]
     if nested:
-        errors.append("more than one SKILL.md (claude.ai accepts exactly one): "
+        errors.append("more than one SKILL.md (an upload takes exactly one): "
                       + ", ".join(p.relative_to(skill).as_posix() for p in nested))
 
     text = _read_utf8(md, "SKILL.md", errors)
@@ -1022,12 +1054,12 @@ def check(skill_dir, out=None):
     extra = [k for k in fm if k not in ALLOWED_KEYS]
     for k in extra:
         if not isinstance(k, str):
-            errors.append(f"a frontmatter key is read by YAML as {_kind(k)} ({k}), not text; quote it, or drop it")
+            errors.append(f"a frontmatter key is read by YAML as {_kind(k)} ({_shown(k)}), not text; quote it, or drop it")
     names = sorted(k for k in extra if isinstance(k, str))
     if names:
         errors.append(f"frontmatter keys not allowed: {', '.join(names)}")
 
-    name = "" if fm.get("name") is None else str(fm["name"]).strip()
+    name = "" if fm.get("name") is None else _shown(fm["name"]).strip()
     if not name:
         errors.append("frontmatter has no name")
     else:
@@ -1040,7 +1072,7 @@ def check(skill_dir, out=None):
     if desc is not None and not isinstance(desc, str):
         advice = ("write it as one line of text, or a > block" if isinstance(desc, (list, dict))
                   else "YAML reads it so unquoted; quote it")
-        errors.append(f"description is {_kind(desc)} ({desc}), not text: {advice}")
+        errors.append(f"description is {_kind(desc)} ({_shown(desc)}), not text: {advice}")
         desc = ""
     elif not desc or not desc.strip():
         errors.append("frontmatter has no description")
@@ -1054,7 +1086,11 @@ def check(skill_dir, out=None):
         warnings.append("description says what the skill is but not when to use it; "
                         "the description is the only text a model sees when choosing a skill")
     comp = fm.get("compatibility")
-    if comp and len(str(comp)) > 500:
+    try:
+        long_comp = bool(comp) and len(str(comp)) > 500
+    except ValueError:  # a number past Python's 4,300-digit limit for printing: thousands of characters as written
+        long_comp = True
+    if long_comp:
         errors.append("compatibility is over 500 characters")
 
     body_lines = body.count("\n") + 1

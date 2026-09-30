@@ -50,11 +50,16 @@ folder that takes no new folder is refused before anything is built; the probe r
 again) and one that cannot be removed is named; every deploy message says the reason in words, never as an
 [Errno] repr; each file past a date edge is listed as "name dated YYYY-MM-DD" (or "before 1970", "past about
 3000" where localtime refuses), with no parentheses inside parentheses.
+Updated: 2026-09-30 16:43 ET — v1.11: a skills home with no folder above it at all (a drive or share that is not there) is
+refused before anything is built, never after with "nothing changed"; a first deploy's empty aside folder that
+cannot be removed is named as that, not as an old copy; the help and closing lines name no host and assume no
+skills folder (the Agent Skills format is for any agent).
 
-  {name}.skill       what claude.ai and the Claude desktop app install: upload it
-                      in the skill settings, or open the file card an agent presents
+  {name}.skill       for a host that installs a skill from an uploaded archive: upload
+                      it in its skill settings, or open the file card an agent presents
   {name}-v{X.Y}.zip   the same archive, versioned, for keeping and for local agents:
-                      extract so the folder lands at ~/.agents/skills/{name}/
+                      extract it into your agent's skills folder so it lands as
+                      <skills-folder>/{name}/ (--deploy <skills-home> does this for you)
 
 Both hold {name}/SKILL.md at the root. validate_skill.py (beside this file) runs
 first; any error stops packaging. Left out: evals/ and tests/ at the skill root,
@@ -499,20 +504,21 @@ def _refusal(skill_name: str, home: Path, source=None, probe=True):
         where = home
         while not where.exists() and where.parent != where:
             where = where.parent
-        if where.is_dir():
-            try:
-                made = _fresh(where, ".probe-", "", directory=True)
-            except OSError as e:
-                if where == home:
-                    return (f"{home} takes no new folder from this user ({e.strerror or e}); choose a skills home "
-                            "you may write to")
-                return (f"{home} could not be made: {where} takes no new folder from this user ({e.strerror or e}); "
-                        "choose a skills home you may write to")
-            try:
-                made.rmdir()
-            except OSError as e:
-                _say(f"⚠️ {made} is an empty folder this run made to test the skills home and could not remove "
-                     f"({e.strerror or e}); delete it")
+        if not where.is_dir():  # the walk reached a root that is not there: a missing drive, an absent share
+            return f"{home} could not be made: no folder above it exists ({where} is not there)"
+        try:
+            made = _fresh(where, ".probe-", "", directory=True)
+        except OSError as e:
+            if where == home:
+                return (f"{home} takes no new folder from this user ({e.strerror or e}); choose a skills home "
+                        "you may write to")
+            return (f"{home} could not be made: {where} takes no new folder from this user ({e.strerror or e}); "
+                    "choose a skills home you may write to")
+        try:
+            made.rmdir()
+        except OSError as e:
+            _say(f"⚠️ {made} is an empty folder this run made to test the skills home and could not remove "
+                 f"({e.strerror or e}); delete it")
     # A skill developed in place under its skills home is the very folder being
     # packaged: replacing it would delete everything the archive leaves out.
     if source is not None and (_inside(target, source) or _inside(source, target)):
@@ -605,7 +611,10 @@ def deploy(archive: Path, skill_name: str, home: Path, source=None) -> Path:
     try:
         _remove(aside)
     except OSError as e:
-        _say(f"⚠️ Deployed, but the old copy could not be removed ({e.strerror or e}); delete {aside} when it is free")
+        if moved:
+            _say(f"⚠️ Deployed, but the old copy could not be removed ({e.strerror or e}); delete {aside}")
+        else:  # a first deploy moved nothing aside: the folder is empty, and the reason is not a file in use
+            _say(f"⚠️ Deployed, but the empty folder {aside} could not be removed ({e.strerror or e}); delete it")
     for s in stale:
         _say(f"⚠️ {s} is an old copy from an earlier deploy that could not be removed (still in use); "
              "delete it when it is free")
@@ -712,8 +721,8 @@ def main(argv=None):
         _say(f"🚚 Deployed to {target}")
 
     _say(f"✅ Dual packaging complete: {name}")
-    _say("   .skill → upload in claude.ai skill settings (or open the presented file card)")
-    _say(f"   .zip   → keep; for local agents extract to ~/.agents/skills/{name}/")
+    _say("   .skill → upload where a host installs skills from an archive (or open the presented file card)")
+    _say(f"   .zip   → keep; extract it into your agent's skills folder so it lands as <skills-folder>/{name}/")
     return 0
 
 

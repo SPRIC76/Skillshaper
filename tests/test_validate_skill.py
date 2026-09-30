@@ -12,6 +12,10 @@ each PyYAML's value and type or a refusal by name, never a crash), the ninth rev
 6.0.3, the shapes outside the subset refused by name, linear time without recursion, typed keys and list or mapping
 descriptions named, no invisible literal character in any script or test, and the docs' subset; each failed before
 its fix. The depth-2 nested mapping moved from EighthReview.PARITY to NinthReview.UNSUPPORTED.
+Updated: 2026-09-30 16:43 ET — TenthReview: a number past Python's 4,300-digit limit and a tag PyYAML cannot build are ERROR
+lines on both paths; the reserved-character, tab and BOM messages; the docs' subset as the code reads it; SKILL.md names
+no host outside an install example and no other skill (with the check held to its job); each failed before its fix.
+NinthReview.TABLE's reserved-character verdicts now read "starts with '`'", the message's new form.
 
 Run from the repository root:
     python -B -m unittest discover -s tests -v
@@ -1038,14 +1042,14 @@ class NinthReview(unittest.TestCase):
          ("text", "metadata", {"tags": ["a", "b"], "version": "1"})),
         ("n2-nested-indented", "metadata:\n  tags:\n    - a", ("text", "metadata", {"tags": ["a"]})),
         ("n2-comment-between", "allowed-tools:\n- Read\n# the writer\n- Write", ("text", "allowed-tools", ["Read", "Write"])),
-        ("n3-backtick", "description: `good-skill` does the thing. Use when asked.", ("error", "starts with `")),
-        ("n3-at", "description: @good-skill does the thing. Use when asked.", ("error", "starts with @")),
-        ("n3-percent", "description: %s is replaced. Use when asked.", ("error", "starts with %")),
-        ("n3-dash", "description: - Use when asked.", ("error", "starts with -")),
-        ("n3-comma", "description: , use when asked", ("error", "starts with ,")),
-        ("n3-bracket", "description: ]x", ("error", "starts with ]")),
-        ("n3-brace", "description: }x", ("error", "starts with }")),
-        ("n3-pipe", "description: |foo use when", ("error", "starts with |")),
+        ("n3-backtick", "description: `good-skill` does the thing. Use when asked.", ("error", "starts with '`'")),
+        ("n3-at", "description: @good-skill does the thing. Use when asked.", ("error", "starts with '@'")),
+        ("n3-percent", "description: %s is replaced. Use when asked.", ("error", "starts with '%'")),
+        ("n3-dash", "description: - Use when asked.", ("error", "starts with '-'")),
+        ("n3-comma", "description: , use when asked", ("error", "starts with ','")),
+        ("n3-bracket", "description: ]x", ("error", "starts with ']'")),
+        ("n3-brace", "description: }x", ("error", "starts with '}'")),
+        ("n3-pipe", "description: |foo use when", ("error", "starts with '|'")),
         ("n4-folded-comment", "description: > # folded below\n  Use when asked.", ("text", "description", "Use when asked.")),
         ("n4-literal-comment", "description: |- # literal\n  Use when\n  asked.", ("text", "description", "Use when\nasked.")),
         ("n5-escaped-break", 'description: "Use when\\\n  asked."', ("text", "description", "Use whenasked.")),
@@ -1243,6 +1247,214 @@ class NinthReview(unittest.TestCase):
                     self.assertIn(shape, text)
                 self.assertIn("pip install pyyaml", text)
                 self.assertNotIn("with and without PyYAML for the shapes a SKILL.md uses", text)
+
+
+def _digits(n):
+    """How many decimal digits n has, counted with Python's integer-string limit lifted for the count only."""
+    import sys
+    saved = sys.get_int_max_str_digits()
+    sys.set_int_max_str_digits(0)
+    try:
+        return len(str(abs(n)))
+    finally:
+        sys.set_int_max_str_digits(saved)
+
+
+# Hosts and host paths: SKILL.md names one only in an install example, as one of several (any agent that reads
+# SKILL.md is its reader). Lowercase words, matched in any letter case.
+HOST_WORDS = re.compile(r"(?i)\b(?:claude|anthropic|cursor|codex|copilot|windsurf|gemini|openai|opencode|cline)\b"
+                        r"|~/\.agents\b")
+# Every kebab-case word SKILL.md may use: its own id and former ids, format words and flags. Any other one is
+# taken for another skill's name and fails; a new word is added here only after reading it.
+SKILL_MD_WORDS = {
+    "skill-creator-plus", "skill-creator-2", "skill-shaper",  # its own former ids and name, in the footnote
+    "skill-authoring", "allowed-tools", "kebab-case", "byte-order", "2.1-rc1", "sc2-v", "read-only", "utf-8",
+    "built-in", "double-quoted", "root-level", "byte-for-byte", "anti-patterns", "user-friendly",
+    "missing-reference", "skill-folder", "skills-home",
+}
+# The word before "skill" or "skills": a name there ("the verify skill") is another skill's; these are not.
+SKILL_WORDS_BEFORE = {"a", "an", "the", "this", "that", "any", "each", "every", "one", "own", "same", "its", "another",
+                      "other", "installed", "new", "old", "your", "my", "agent", "local", "hosted", "existing", "shape",
+                      "package", "check", "upgrade", "handing", "which", "no"}
+
+
+def _named_hosts_and_skills(text):
+    """Every line of text that names a host outside an install example, or another skill: [(line number, what)].
+    An install example is a section whose heading says Install, up to the next heading at its level or above."""
+    found, install_level = [], None
+    for number, line in enumerate(text.split("\n"), 1):
+        heading = re.match(r"(#+) ", line)
+        if heading:
+            level = len(heading.group(1))
+            if install_level is not None and level <= install_level:
+                install_level = None
+            if "install" in line.lower():
+                install_level = level
+        if install_level is None:
+            for m in HOST_WORDS.finditer(line):
+                found.append((number, f"host {m.group()}"))
+        for word in re.findall(r"(?<![\w./-])[A-Za-z0-9][A-Za-z0-9.]*(?:-[A-Za-z0-9.]*)+", line):
+            word = word.rstrip(".-")  # "single- or double-quoted": a word cut at its dash
+            if "-" in word and word.lower() not in SKILL_MD_WORDS and not re.fullmatch(r"[\d.-]+", word):
+                found.append((number, f"kebab-case name {word}"))
+        for m in re.finditer(r"\b([A-Za-z][\w-]*)`?\s+skills?\b", line):
+            if m.group(1).lower() not in SKILL_WORDS_BEFORE:
+                found.append((number, f"'{m.group(1)} skill'"))
+    return found
+
+
+class TenthReview(unittest.TestCase):
+    """The tenth review (71b15bb): a number past Python's 4,300-digit limit, and a PyYAML tag that cannot be built,
+    are ERROR lines, never a traceback; the reserved-character, tab and BOM messages say one true thing each; the
+    docs name the subset exactly as the code reads it. And SKILL.md is for any agent: no host named outside an
+    install example, no other skill named."""
+
+    BIG_HEX = "0x" + "f" * 3700
+    BIG_SEXAGESIMAL = ":".join(["1"] * 2600)
+    # Each built by PyYAML 6.0.3 on 2026-09-30 as an int no str() prints under the default limit.
+    TABLE = [
+        ("f1-hex-description", "description: " + BIG_HEX, ("typed", "a number")),
+        ("f1-sexagesimal-description", "description: " + BIG_SEXAGESIMAL, ("typed", "a number")),
+        ("f1-list-description", f"description: [{BIG_HEX}]", ("typed", "a list")),
+    ]
+    # PyYAML 6.0.3 raises these from its constructors, outside yaml.YAMLError (recorded 2026-09-30).
+    TAGS = {"bool-maybe": ("!!bool maybe", "KeyError"), "int-empty": ("!!int", "IndexError"),
+            "float-empty": ("!!float", "IndexError"), "timestamp-soon": ("!!timestamp soon", "AttributeError")}
+
+    def _check(self, tmp, label, frontmatter):
+        skill = make_skill(Path(tmp) / label, md_bytes=f"---\n{frontmatter}---\n\n# Body\n".encode("utf-8"))
+        errors, _ = validate_skill.check(skill)
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            rc = validate_skill.main([str(skill)])
+        self.assertEqual(rc, 1, out.getvalue())
+        self.assertIn(f"good-skill: {len(errors)} error(s)", out.getvalue())
+        return errors
+
+    def _big_numbers(self, builtin):
+        import sys
+        if not hasattr(sys, "get_int_max_str_digits"):
+            self.skipTest("this Python has no integer-string limit")
+        EighthReview._parity(self, builtin=builtin, table=self.TABLE)
+        hex_digits = _digits(int(self.BIG_HEX, 16))
+        octal = "0" + "7" * 6000
+        with tempfile.TemporaryDirectory() as tmp:
+            errors = self._check(tmp, "hex", f"name: good-skill\ndescription: {self.BIG_HEX}\n")
+            self.assertEqual(errors, [f"description is a number ({hex_digits:,} digits long), not text: YAML reads it "
+                                      "so unquoted; quote it"])
+            errors = self._check(tmp, "list", f"name: good-skill\ndescription: [{self.BIG_HEX}]\n")
+            self.assertEqual(errors, ["description is a list (too long to show), not text: write it as one line of "
+                                      "text, or a > block"])
+            errors = self._check(tmp, "name", f"name: {octal}\ndescription: Use when asked.\n")
+            shown = f"{_digits(int(octal, 8)):,} digits long"
+            self.assertEqual(errors, [f"name '{shown}' must be kebab-case, at most 64 characters",
+                                      f"name '{shown}' differs from its folder 'good-skill'; agents load by name"])
+            errors = self._check(tmp, "compatibility", f"name: good-skill\ndescription: Use when asked.\n"
+                                                       f"compatibility: {self.BIG_HEX}\n")
+            self.assertEqual(errors, ["compatibility is over 500 characters"])
+
+    def test_a_number_past_the_digit_limit_is_an_error_line_without_pyyaml(self):
+        """F1: hex, octal and sexagesimal numbers are built past Python's 4,300-digit limit; str() then raised
+        ValueError in check() and both scripts stopped on a traceback."""
+        with without_pyyaml():
+            self._big_numbers(builtin=True)
+
+    @unittest.skipUnless(_has_pyyaml(), "PyYAML is not installed here")
+    def test_a_number_past_the_digit_limit_is_an_error_line_with_pyyaml(self):
+        self._big_numbers(builtin=False)
+
+    @unittest.skipUnless(_has_pyyaml(), "PyYAML is not installed here")
+    def test_a_tag_pyyaml_cannot_build_is_an_error_line_naming_what_failed(self):
+        """F2: PyYAML's constructors raise KeyError, IndexError and AttributeError for these; each stopped both
+        scripts on a traceback."""
+        with tempfile.TemporaryDirectory() as tmp:
+            for label, (value, raised) in self.TAGS.items():
+                with self.subTest(label):
+                    errors = self._check(tmp, label, f"name: good-skill\ndescription: {value}\n")
+                    self.assertEqual(len(errors), 1, errors)
+                    self.assertTrue(errors[0].startswith("frontmatter is not valid YAML: "), errors)
+                    self.assertIn(f"({raised})", errors[0])
+
+    def test_a_tag_is_refused_by_name_without_pyyaml(self):
+        with without_pyyaml(), tempfile.TemporaryDirectory() as tmp:
+            for label, (value, _) in self.TAGS.items():
+                with self.subTest(label):
+                    errors = self._check(tmp, label, f"name: good-skill\ndescription: {value}\n")
+                    self.assertEqual(len(errors), 1, errors)
+                    self.assertIn("a YAML tag (!)", errors[0])
+
+    def test_the_reserved_character_tab_and_bom_messages_say_one_true_thing(self):
+        """F5: "starts with ,, which" and "starts with `g, which" quoted a second character; the tab message said
+        YAML refuses a tab that YAML reads inside quotes, a block or a comment; the BOM message said YAML reads it
+        as a line break (PyYAML keeps it as text) and chained two which-clauses."""
+        with without_pyyaml():
+            for value, ch in ((", use when asked", ","), ("`good-skill` use when", "`"), ("@x use when", "@"),
+                              ("- use when", "-")):
+                with self.subTest(value):
+                    with self.assertRaises(ValueError) as cm:
+                        validate_skill._parse_frontmatter(f"---\nname: good-skill\ndescription: {value}\n---\n")
+                    self.assertIn(f"the value of description starts with '{ch}', which YAML reserves", str(cm.exception))
+            tab = chr(9)
+            for label, line in (("quoted", f"description: 'Use when{tab}asked.'"),
+                                ("comment", f"description: Use when asked. #{tab}c"),
+                                ("block", f"description: >\n  Use when{tab}asked.")):
+                with self.subTest(label):
+                    with self.assertRaises(ValueError) as cm:
+                        validate_skill._parse_frontmatter(f"---\nname: good-skill\n{line}\n---\n")
+                    message = str(cm.exception)
+                    self.assertRegex(message, r"^frontmatter line \d holds a tab, which the built-in reader does not "
+                                              r"take \(it takes no tab anywhere\); use spaces")
+                    self.assertNotIn("YAML refuses", message)
+            with self.assertRaises(ValueError) as cm:
+                validate_skill._parse_frontmatter(f"---\nname: good-skill\ndescription: Use when{validate_skill.BOM} "
+                                                  "asked.\n---\n")
+            self.assertEqual(str(cm.exception), "frontmatter line 3 holds a byte-order mark (U+FEFF), which the built-in "
+                                                "reader does not take; remove it, or write it as \\uFEFF inside double "
+                                                "quotes, or install PyYAML (pip install pyyaml)")
+            with self.assertRaises(ValueError) as cm:
+                validate_skill._parse_frontmatter(f"---\nname: good-skill\ndescription: Use when{chr(0x2028)} "
+                                                  "asked.\n---\n")
+            self.assertEqual(str(cm.exception).count("which"), 1, cm.exception)
+            self.assertIn("a line break YAML reads (a Unicode line separator, U+2028)", str(cm.exception))
+
+    def test_the_docs_name_the_subset_as_the_code_reads_it(self):
+        """F4: the docs' subset read wider than the code: any key, a tab inside quotes or a block, a list item over
+        lines; and `~:` was said to be named as YAML types it, which the built-in reader refuses."""
+        for doc in (REPO / "sc2" / "SKILL.md", REPO / "README.md"):
+            text = doc.read_text(encoding="utf-8")
+            with self.subTest(doc.name):
+                for said in ("a key of letters, digits, `_` and `-` (or quoted without escapes), up to 128 characters",
+                             "block lists of `- items`, one line each", "no tab anywhere", "`x.y:`", "`~:`",
+                             "`{a}`", "a quote continued at column 0", "a block header on the line below its key"):
+                    self.assertIn(said, text)
+        skill_md = (REPO / "sc2" / "SKILL.md").read_text(encoding="utf-8")
+        self.assertNotIn("`1:`, `~:`), named as YAML types it", skill_md)
+        # The code's own docstring says the same subset.
+        doc = validate_skill._Reader.__doc__
+        self.assertIn("up to 128 characters", " ".join(doc.split()))
+        self.assertIn("no tab anywhere", " ".join(doc.split()))
+
+    def test_skill_md_names_no_host_outside_an_install_example_and_no_other_skill(self):
+        """Owner, 2026-09-30: a public skill is for any agent that reads SKILL.md; a host is named only in an install
+        example, as one of several, and another skill never by name. 1.4 at 71b15bb named claude.ai, the Claude
+        desktop app and another skill-authoring skill throughout."""
+        text = (REPO / "sc2" / "SKILL.md").read_text(encoding="utf-8")
+        self.assertEqual(_named_hosts_and_skills(text), [])
+        install = [line for line in text.split("\n") if HOST_WORDS.search(line)]
+        hosts = {m.group().lower() for line in install for m in HOST_WORDS.finditer(line)}
+        self.assertGreaterEqual(len(hosts), 3, hosts)  # an install example names several, never one
+
+    def test_the_host_and_skill_check_goes_red_on_each_shape(self):
+        """The check above, held to its job: each line below must be found."""
+        cases = {"host in the body": "# Title\n\nUpload it to claude.ai.\n",
+                 "host path": "# Title\n\nDeploy to ~/.agents/skills.\n",
+                 "host after the install section": "## Install\n\nCursor\n\n## Use\n\nIn Cursor, run it.\n",
+                 "kebab-case skill name": "# Title\n\nPair it with skill-creator.\n",
+                 "a named skill": "# Title\n\nRun the verifier skill first.\n"}
+        for label, text in cases.items():
+            with self.subTest(label):
+                self.assertNotEqual(_named_hosts_and_skills(text), [])
+        self.assertEqual(_named_hosts_and_skills("## Install examples\n\nclaude.ai, Cursor or Codex.\n"), [])
 
 
 if __name__ == "__main__":
