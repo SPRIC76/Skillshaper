@@ -6,6 +6,9 @@ Updated: 2026-09-30 04:02 ET — v1.1: '.' validates under its own folder name; 
 checked; a file that is not UTF-8 is an ERROR line and a BOM a warning; test files are
 exempt from the missing-reference check; unknown flags are a usage error; the user-folder
 check ignores letter case.
+Updated: 2026-09-30 04:44 ET — v1.2: "Triggers on ..." counts as a when-to-use cue; only an exact copy of
+this validator skips the marker and user-folder checks, not any file of its name; paths in
+messages use forward slashes; a dotfile the packager drops is not an orphan.
 
 Errors are what claude.ai or the Skills API would reject, or what leaves the
 skill broken: frontmatter keys and limits, a name that differs from its folder,
@@ -42,7 +45,7 @@ ROOT_SKIP_DIRS = {"evals", "tests"}
 BUNDLE_DIRS = ("references", "scripts", "assets")
 # A bundled path, written bare or with a ./ prefix; ../ and foo/scripts/ stay out.
 REF_PATTERN = re.compile(r"(?<![\w/.-])(?:\./)?((?:references|scripts|assets)/[\w.\-/]*[\w])")
-WHEN_CUE = re.compile(r"\b(use (this skill )?(when|whenever|for|to)|trigger|apply when|invoke when)\b", re.I)
+WHEN_CUE = re.compile(r"\b(use (this skill )?(when|whenever|for|to)|trigger(s|ed)?|apply when|invoke when)\b", re.I)
 STALE_MARKERS = {
     "/mnt/skills": "a claude.ai sandbox path that other surfaces do not have",
     "/mnt/user-data": "a claude.ai sandbox path that other surfaces do not have",
@@ -113,6 +116,14 @@ def _read_utf8(path, rel, errors):
         return None
 
 
+def _is_this_validator(path):
+    """This file names the markers it hunts; a copy of it is exempt, another skill's file of the same name is not."""
+    try:
+        return path.read_bytes().replace(b"\r\n", b"\n") == Path(__file__).read_bytes().replace(b"\r\n", b"\n")
+    except OSError:
+        return False
+
+
 def _is_test_file(rel):
     """Test code names fixtures that need not exist, so it skips the missing-reference check."""
     return "tests" in rel.parts[:-1] or any(fnmatch.fnmatchcase(rel.name, pat)
@@ -134,7 +145,7 @@ def check(skill_dir):
               and p.relative_to(skill).parts[0] not in ROOT_SKIP_DIRS]
     if nested:
         errors.append("more than one SKILL.md (claude.ai accepts exactly one): "
-                      + ", ".join(str(p.relative_to(skill)) for p in nested))
+                      + ", ".join(p.relative_to(skill).as_posix() for p in nested))
 
     text = _read_utf8(md, "SKILL.md", errors)
     if text is None:
@@ -201,8 +212,10 @@ def check(skill_dir):
             if not (skill / ref).exists() and not (src.parent / ref).exists():
                 errors.append(f"{src.relative_to(skill).as_posix()} references {ref}, which does not exist")
 
+    # Dotfiles (.keep, .gitignore) never reach the archive, so they cannot be orphans in it.
     bundled = [p for d in BUNDLE_DIRS if (skill / d).is_dir() for p in (skill / d).rglob("*")
-               if p.is_file() and not (set(p.relative_to(skill).parts) & JUNK_DIRS)]
+               if p.is_file() and not (set(p.relative_to(skill).parts) & JUNK_DIRS)
+               and not any(part.startswith(".") for part in p.relative_to(skill).parts)]
     everything = "\n".join(texts.values())
     for p in bundled:
         rel = p.relative_to(skill).as_posix()
@@ -226,7 +239,7 @@ def check(skill_dir):
                 warnings.append(f"junk in the skill folder: {p.relative_to(skill).as_posix()}")
 
     for src, t in texts.items():
-        if src.name == "validate_skill.py":
+        if src.name == "validate_skill.py" and _is_this_validator(src):
             continue
         for marker, why in STALE_MARKERS.items():
             if marker in t:

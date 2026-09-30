@@ -183,6 +183,117 @@ class Deploy(unittest.TestCase):
                 package_dual.deploy(archive, "good-skill", home)
             self.assertEqual(list(real.iterdir()), [])
 
+    def test_deploy_onto_its_own_source_is_refused_and_source_untouched(self):
+        """High (second review): a skill developed in place under its skills home is its own deploy target."""
+        files = {".env": "KEY=1\n", "evals/e1.md": "eval\n", "tests/t.py": "pass\n",
+                 "scratch-workspace/notes.md": "notes\n", "scripts/run.py": "print(1)\n"}
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp) / "home"
+            skill = make_skill(home, files=files)
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                rc = package_dual.main([str(skill), "--version", "1.0", "--output", str(Path(tmp) / "out"),
+                                        "--deploy", str(home)])
+            self.assertEqual(rc, 1, out.getvalue())
+            self.assertIn("being packaged", out.getvalue())
+            for rel in files:
+                self.assertTrue((skill / rel).is_file(), rel)
+
+    def test_junction_inside_the_target_is_removed_as_a_link(self):
+        """Medium (second review): a junction child is a link, never a folder to empty."""
+        with tempfile.TemporaryDirectory() as tmp:
+            archive = self._packaged(tmp)
+            home = Path(tmp) / "home"
+            target = make_skill(home, files={"aaa-first.txt": "first\n", "references/old.md": "old\n"})
+            real = Path(tmp) / "realA"
+            real.mkdir()
+            (real / "precious.txt").write_text("keep\n", encoding="utf-8")
+            if make_junction(target / "zz-linked", real) is None:
+                self.skipTest("no junction on this platform")
+            package_dual.deploy(archive, "good-skill", home)
+            self.assertEqual(sorted(p.relative_to(target).as_posix() for p in target.rglob("*") if p.is_file()),
+                             ["SKILL.md", "scripts/run.py"])
+            self.assertFalse(os.path.lexists(target / "zz-linked"))
+            self.assertEqual((real / "precious.txt").read_text(encoding="utf-8"), "keep\n")
+
+    def test_a_failed_unpack_puts_the_old_copy_back(self):
+        """Medium (second review): a replacement either lands whole or nothing changes."""
+        with tempfile.TemporaryDirectory() as tmp:
+            archive = self._packaged(tmp)
+            home = Path(tmp) / "home"
+            target = make_skill(home, files={"references/stale.md": "old\n", "scripts/run.py": "print(0)\n"})
+            before = {p.relative_to(target).as_posix(): p.read_bytes() for p in target.rglob("*") if p.is_file()}
+            real_copy, calls = package_dual.shutil.copyfileobj, []
+
+            def fail_second(src, dst, *a):
+                calls.append(1)
+                if len(calls) == 2:
+                    raise OSError("disk full (simulated)")
+                return real_copy(src, dst, *a)
+
+            package_dual.shutil.copyfileobj = fail_second
+            try:
+                with self.assertRaises(RuntimeError) as cm:
+                    package_dual.deploy(archive, "good-skill", home)
+            finally:
+                package_dual.shutil.copyfileobj = real_copy
+            self.assertIn("nothing changed", str(cm.exception))
+            after = {p.relative_to(target).as_posix(): p.read_bytes() for p in target.rglob("*") if p.is_file()}
+            self.assertEqual(after, before)
+
+    def test_a_skills_home_that_is_a_file_is_refused_before_packaging(self):
+        """Low (second review): a refusal, not a traceback, and no archives built for nothing."""
+        with tempfile.TemporaryDirectory() as tmp:
+            skill = make_skill(Path(tmp) / "src")
+            home = Path(tmp) / "home"
+            home.write_text("a file\n", encoding="utf-8")
+            out_dir = Path(tmp) / "out"
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                rc = package_dual.main([str(skill), "--version", "1.0", "--output", str(out_dir), "--deploy", str(home)])
+            self.assertEqual(rc, 1, out.getvalue())
+            self.assertIn("not a folder", out.getvalue())
+            self.assertFalse(out_dir.exists())
+
+    @unittest.skipIf(os.name == "nt", "Windows keeps no executable bit")
+    def test_deployed_script_keeps_its_executable_bit(self):
+        """Low (second review): the mode the archive records reaches the deployed copy."""
+        with tempfile.TemporaryDirectory() as tmp:
+            skill = make_skill(Path(tmp) / "src", files={"scripts/run.py": "#!/usr/bin/env python3\nprint(1)\n"})
+            target = package_dual.deploy(package(skill, Path(tmp) / "out"), "good-skill", Path(tmp) / "home")
+            self.assertTrue(os.stat(target / "scripts" / "run.py").st_mode & 0o100)
+            self.assertFalse(os.stat(target / "SKILL.md").st_mode & 0o100)
+
+
+class Source(unittest.TestCase):
+    """Medium (second review): where the skill is read from and where the archives go."""
+
+    def test_skill_reached_through_a_link_keeps_the_links_name(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            real = make_skill(Path(tmp) / "dp", "sc2")
+            dev = real.with_name("sc2-dev")
+            real.rename(dev)
+            link = make_junction(Path(tmp) / "dp" / "sc2", dev)
+            if link is None:
+                self.skipTest("no junction on this platform")
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                rc = package_dual.main([str(link), "--version", "1.0", "--output", str(Path(tmp) / "out")])
+            self.assertEqual(rc, 0, out.getvalue())
+            names = zipfile.ZipFile(Path(tmp) / "out" / "sc2.skill").namelist()
+            self.assertEqual(names, ["sc2/SKILL.md"])
+
+    def test_output_inside_the_skill_is_refused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            skill = make_skill(Path(tmp) / "src")
+            for output in (skill / "dist", skill):
+                out = io.StringIO()
+                with contextlib.redirect_stdout(out):
+                    rc = package_dual.main([str(skill), "--version", "1.0", "--output", str(output)])
+                self.assertEqual(rc, 1, out.getvalue())
+                self.assertIn("inside the skill", out.getvalue())
+                self.assertEqual(sorted(p.name for p in skill.rglob("*")), ["SKILL.md"], output)
+
 
 class Archive(unittest.TestCase):
     """Low: dotfiles stay out, text files land with LF, binaries byte-for-byte, .skill equals .zip."""
@@ -214,23 +325,32 @@ class Archive(unittest.TestCase):
 
     def test_text_files_land_with_lf_and_binaries_untouched(self):
         binary = b"PK\x00\x01\r\n\x00\xff\r\n"
+        # Second review: a binary need not hold a NUL. A PDF's xref offsets count its CRLFs,
+        # and a calendar file must keep CRLF (RFC 5545); only known text is rewritten.
+        pdf = b"%PDF-1.4\r\n1 0 obj << /Type /Catalog >> endobj\r\nxref\r\n0 2\r\ntrailer << /Root 1 0 R >>\r\n%%EOF\r\n"
+        ics = b"BEGIN:VCALENDAR\r\nVERSION:2.0\r\nEND:VCALENDAR\r\n"
         files = {
             "scripts/run.py": "#!/usr/bin/env python3\nprint(1)\n",
+            "scripts/tool": "#!/bin/sh\necho hi\n",
             "references/guide.md": "# Guide\n\nline\n",
-            "assets/notes.unknownext": "plain text\nno nul\n",
             "assets/blob.bin": binary,
+            "assets/form.pdf": pdf,
+            "assets/event.ics": ics,
         }
         with tempfile.TemporaryDirectory() as tmp:
             skill = make_skill(Path(tmp) / "src", files=files, crlf=True)
             self.assertIn(b"\r\n", (skill / "SKILL.md").read_bytes())
             archive = package(skill, Path(tmp) / "out")
             with zipfile.ZipFile(archive) as zf:
-                for text_name in ("SKILL.md", "scripts/run.py", "references/guide.md", "assets/notes.unknownext"):
+                for text_name in ("SKILL.md", "scripts/run.py", "scripts/tool", "references/guide.md"):
                     data = zf.read(f"good-skill/{text_name}")
                     self.assertNotIn(b"\r\n", data, text_name)
                     self.assertIn(b"\n", data, text_name)
                 self.assertEqual(zf.read("good-skill/assets/blob.bin"), binary)
+                self.assertEqual(zf.read("good-skill/assets/form.pdf"), pdf)
+                self.assertEqual(zf.read("good-skill/assets/event.ics"), ics)
                 self.assertEqual(zf.getinfo("good-skill/scripts/run.py").external_attr >> 16 & 0o777, 0o755)
+                self.assertEqual(zf.getinfo("good-skill/scripts/tool").external_attr >> 16 & 0o777, 0o755)
                 self.assertEqual(zf.getinfo("good-skill/SKILL.md").external_attr >> 16 & 0o777, 0o644)
 
     def test_deploy_lands_lf_text(self):

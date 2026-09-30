@@ -82,9 +82,9 @@ Produces:
 | `dist/sc2.skill` | Upload to claude.ai or drag into Claude Desktop |
 | `dist/sc2-v1.4.zip` | Versioned archive for keeping and for manual installs |
 
-Both are zip archives with `sc2/SKILL.md` as the root entry. `evals/` and `tests/` at the skill root, `*-workspace` folders, `__pycache__`, `node_modules`, `.git`, dotfiles such as `.gitignore` and `.env`, and OS junk are left out. Text files are written with LF line endings whatever the checkout uses (`.md`, `.txt`, `.py`, `.json`, `.yaml`, `.yml`, `.sh`, `.ps1`, `.js`, `.ts`, `.css`, `.html`, `.csv`, `.toml`, and any file with no NUL byte in its first 8 KB); binaries stay byte-for-byte.
+Both are zip archives with `sc2/SKILL.md` as the root entry. `evals/` and `tests/` at the skill root, `*-workspace` folders, `__pycache__`, `node_modules`, `.git`, dotfiles such as `.gitignore` and `.env`, and OS junk are left out. Text files are written with LF line endings whatever the checkout uses (`.md`, `.txt`, `.py`, `.json`, `.yaml`, `.sh`, `.js`, `.html` and the other text types listed in `TEXT_SUFFIXES`, and any script that starts with `#!`); every other file stays byte-for-byte, a PDF or a calendar file included. Write the archives outside the skill folder: an `--output` inside it is refused.
 
-`--deploy ~/.agents/skills` also installs the packaged skill into `~/.agents/skills/sc2/`, replacing that folder's contents in place — only when the folder is absent, empty, or holds a `SKILL.md` naming the same skill. Anything else (another skill, a folder of other files, a file, a symlink or junction) is refused with a message and nothing changes.
+`--deploy ~/.agents/skills` also installs the packaged skill into `~/.agents/skills/sc2/`, replacing that folder's contents in place — only when the folder is absent, empty, or holds a `SKILL.md` naming the same skill. Anything else (another skill, a folder of other files, a file, a symlink or junction, or the very folder being packaged) is refused with a message and nothing changes. The replacement lands whole or the old copy is put back.
 
 ## Tests
 

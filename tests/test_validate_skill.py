@@ -225,6 +225,38 @@ class UserFolder(unittest.TestCase):
             named = {re.search(r"user folder '([^']+)'", w).group(1) for w in warnings if "user folder" in w}
             self.assertEqual(named, {"other", "someone"}, warnings)
 
+    def test_another_skills_validate_skill_py_is_still_checked(self):
+        """Low (second review): only Skillshaper's own validator, which names the markers it hunts, is exempt."""
+        with tempfile.TemporaryDirectory() as tmp:
+            skill = make_skill(tmp, body="Run scripts/validate_skill.py first.",
+                               files={"scripts/validate_skill.py": "OUT = '/home/claude/x'\nIN = 'C:/Users/hidden/y'\n"})
+            _, warnings = validate_skill.check(skill)
+            self.assertTrue(any("/home/claude" in w for w in warnings), warnings)
+            self.assertTrue(any("user folder 'hidden'" in w for w in warnings), warnings)
+
+
+class SecondReview(unittest.TestCase):
+    """Lows from the second review: a common cue, one path style, and dotfiles the packager drops."""
+
+    def test_triggers_on_counts_as_a_when_cue(self):
+        md = b"---\nname: good-skill\ndescription: Checks things. Triggers on skill talk.\n---\n\n# Body\n"
+        with tempfile.TemporaryDirectory() as tmp:
+            _, warnings = validate_skill.check(make_skill(tmp, md_bytes=md))
+            self.assertFalse([w for w in warnings if "when to use" in w], warnings)
+
+    def test_nested_skill_md_is_named_with_forward_slashes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            skill = make_skill(tmp, body="See references/sub/SKILL.md.",
+                               files={"references/sub/SKILL.md": "# nested\n"})
+            errors, _ = validate_skill.check(skill)
+            self.assertTrue(any("references/sub/SKILL.md" in e for e in errors), errors)
+
+    def test_a_dotfile_in_a_bundle_folder_is_not_an_orphan(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            skill = make_skill(tmp, files={"scripts/.keep": ""})
+            _, warnings = validate_skill.check(skill)
+            self.assertFalse([w for w in warnings if "orphan" in w], warnings)
+
 
 if __name__ == "__main__":
     unittest.main()
