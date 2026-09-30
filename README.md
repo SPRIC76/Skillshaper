@@ -4,6 +4,8 @@ Enhanced agent skill for **creating, improving, validating, and packaging** agen
 
 **Voice:** Standards enforcer — quality and packaging, not creative writing.
 
+The skill's id, and so its folder name, is `sc2`; Skillshaper is its name. Every install below lands this repository's `sc2/` folder under that name.
+
 ## Install via skills.sh CLI
 
 ```bash
@@ -16,85 +18,99 @@ npx skills add SPRIC76/skillshaper
 [![skills.sh](https://skills.sh/b/SPRIC76/skillshaper)](https://skills.sh/SPRIC76/skillshaper)
 ```
 
-## What skillshaper adds
+## What Skillshaper adds
 
 Skillshaper supplements Anthropic's skill-creator workflow with:
 
 | Requirement | Detail |
 |-------------|--------|
-| Validation | `scripts/validate_skill.py` — the upload rules (allowed frontmatter keys, a kebab-case name equal to its folder, a description of at most 1024 characters with no angle brackets, a body under 500 lines) plus stricter checks: a when-to-use cue in the description, every referenced file present, bundled Python that compiles, no orphan or junk files, no sandbox paths or hard-coded user folders |
+| Validation | `sc2/scripts/validate_skill.py` — the upload rules (allowed frontmatter keys, a kebab-case name equal to its folder, a description of at most 1024 characters with no angle brackets, a body under 500 lines) plus stricter checks: a when-to-use cue in the description, every referenced file present, bundled Python that compiles, UTF-8 throughout, no orphan or junk files, no sandbox paths or hard-coded user folders |
 | Dual packaging | Every skill ships as `{name}.skill` **and** `{name}-vX.Y.zip`, validated first; any error stops packaging |
-| Local install | `--deploy` replaces an installed copy's contents in place, so links to that folder keep working |
+| Local install | `--deploy` replaces an installed copy's contents in place, so links to that folder keep working; it touches only an absent or empty folder, or its own skill |
 | Documentation | Progressive disclosure; references stay scannable |
 
 ## Install (Cursor)
 
 ```text
-~/.cursor/skills/skillshaper/
+~/.cursor/skills/sc2/
 # or
-.cursor/skills/skillshaper/
+.cursor/skills/sc2/
 ```
 
-Copy this entire folder. Pair with Cursor's built-in **create-skill** guidance for the full authoring workflow; skillshaper is the stricter **packaging overlay**.
+Copy the `sc2/` folder there, keeping its name. Pair with Cursor's built-in **create-skill** guidance for the full authoring workflow; Skillshaper is the stricter **packaging overlay**.
 
 ## Install (Claude)
 
 ### claude.ai and Claude Desktop
 
-1. Package the folder: `python scripts/package_dual.py ./skillshaper --version 1.1 --output ./dist`
-2. Upload `skillshaper.skill` in your skill settings, or drag it into Claude Desktop.
-3. Confirm skillshaper appears in your skills.
+From the repository root:
+
+1. Package the skill: `python sc2/scripts/package_dual.py sc2 --version 1.4 --output dist`
+2. Upload `dist/sc2.skill` in your skill settings, or drag it into Claude Desktop.
+3. Confirm `sc2` (Skillshaper) appears in your skills.
 
 ### Claude Code
 
-Copy the folder to `~/.claude/skills/skillshaper/` (all projects) or `.claude/skills/skillshaper/` (one project).
+Copy the `sc2/` folder to `~/.claude/skills/sc2/` (all projects) or `.claude/skills/sc2/` (one project).
 
 ## Usage
+
+From the repository root, or with the path to wherever `sc2/` is installed.
 
 Validate one or more skills:
 
 ```bash
-python scripts/validate_skill.py <path/to/skill-folder> [--strict]
+python sc2/scripts/validate_skill.py <path/to/skill-folder> [--strict]
 ```
 
 Package (validation runs first):
 
 ```bash
-python scripts/package_dual.py <path/to/skill-folder> --version <X.Y> [--output <dir>] [--deploy <skills-folder>] [--strict]
+python sc2/scripts/package_dual.py <path/to/skill-folder> --version <X.Y> [--output <dir>] [--deploy <skills-folder>] [--strict]
 ```
 
-**Example:**
+**Example** — the skill packages itself:
 
 ```bash
-python scripts/package_dual.py ./my-skill --version 1.0 --output ./dist
+python sc2/scripts/package_dual.py sc2 --version 1.4 --output dist
 ```
 
 Produces:
 
 | File | Purpose |
 |------|---------|
-| `my-skill.skill` | Upload to claude.ai or drag into Claude Desktop |
-| `my-skill-v1.0.zip` | Versioned archive for keeping and for manual installs |
+| `dist/sc2.skill` | Upload to claude.ai or drag into Claude Desktop |
+| `dist/sc2-v1.4.zip` | Versioned archive for keeping and for manual installs |
 
-Both are zip archives with `my-skill/SKILL.md` as the root entry. `evals/` and `tests/` at the skill root, `*-workspace` folders, `__pycache__`, `node_modules`, `.git` and OS junk are left out.
+Both are zip archives with `sc2/SKILL.md` as the root entry. `evals/` and `tests/` at the skill root, `*-workspace` folders, `__pycache__`, `node_modules`, `.git`, dotfiles such as `.gitignore` and `.env`, and OS junk are left out. Text files are written with LF line endings whatever the checkout uses (`.md`, `.txt`, `.py`, `.json`, `.yaml`, `.yml`, `.sh`, `.ps1`, `.js`, `.ts`, `.css`, `.html`, `.csv`, `.toml`, and any file with no NUL byte in its first 8 KB); binaries stay byte-for-byte.
 
-`--deploy ~/.agents/skills` also installs the packaged skill into that folder, replacing the existing copy's contents in place. It refuses to write through a link, or over a folder whose `SKILL.md` names a different skill.
+`--deploy ~/.agents/skills` also installs the packaged skill into `~/.agents/skills/sc2/`, replacing that folder's contents in place — only when the folder is absent, empty, or holds a `SKILL.md` naming the same skill. Anything else (another skill, a folder of other files, a file, a symlink or junction) is refused with a message and nothing changes.
+
+## Tests
+
+From the repository root:
+
+```bash
+python -B -m unittest discover -s tests -v
+```
+
+Standard library only; every fixture is built in a temporary folder. The tests live in `tests/` beside `sc2/`, not inside it, so packaged and deployed copies stay identical to the development copy.
 
 ## Platform notes
 
 | Platform | Install path |
 |----------|--------------|
-| **Cursor** | `~/.cursor/skills/<name>/` or `.cursor/skills/<name>/` |
-| **claude.ai / Claude Desktop** | Upload or drag in `<name>.skill` |
-| **Claude Code** | `~/.claude/skills/<name>/` or `.claude/skills/<name>/` |
-| **Other agents** | Extract the `.zip` into the agent's skills directory |
+| **Cursor** | `~/.cursor/skills/sc2/` or `.cursor/skills/sc2/` |
+| **claude.ai / Claude Desktop** | Upload or drag in `sc2.skill` |
+| **Claude Code** | `~/.claude/skills/sc2/` or `.claude/skills/sc2/` |
+| **Other agents** | Extract `sc2-v1.4.zip` into the agent's skills directory |
 
 ## Other IDEs and agents
 
 Skillshaper can be used anywhere an agent runtime supports folder-based skill instructions:
 
-- Import/copy the `skillshaper/` folder as a skill package.
-- Ensure the runtime can execute the scripts (Python 3.10+ recommended; standard library only).
+- Import/copy the `sc2/` folder as a skill package.
+- Ensure the runtime can run the scripts (Python 3.10+; standard library only).
 - If the IDE has no skill system, you can still run the validator and packager manually from a terminal.
 
 ## Pre-package checklist
@@ -104,15 +120,20 @@ The validator checks each of these; `--strict` treats warnings as errors.
 - [ ] `SKILL.md` frontmatter: `name` (kebab-case, equal to the folder) + `description` (what it does and when to use it)
 - [ ] Body under 500 lines; depth in `references/`
 - [ ] All referenced files exist; bundled scripts compile
+- [ ] `SKILL.md` and bundled text files are UTF-8, without a BOM
 - [ ] No `__pycache__`, `.pyc`, `node_modules`, junk files
 - [ ] No sandbox-only paths or personal user folders
 
 ## Repository layout
 
 ```text
-SKILL.md
-scripts/package_dual.py
-scripts/validate_skill.py
+sc2/SKILL.md
+sc2/scripts/package_dual.py
+sc2/scripts/validate_skill.py
+tests/test_package_dual.py
+tests/test_validate_skill.py
+LICENSE
+README.md
 ```
 
 ## License

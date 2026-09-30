@@ -2,6 +2,10 @@
 """
 Dual Skill Packager — one validated skill folder in, a .skill and a versioned .zip out.
 package_dual.py v1.1 | 2026-09-15 (v1.0 2026-02-10)
+Updated: 2026-09-30 04:02 ET — v1.2: deploy replaces only an absent or empty folder or its own skill
+(a file, a folder of other files or another skill is refused; junctions detected on
+Python 3.10/3.11 too); dotfiles left out; text files written with LF; a script with a
+shebang stored executable.
 
   {name}.skill        what claude.ai and the Claude desktop app install: upload it
                       in the skill settings, or open the file card an agent presents
@@ -10,12 +14,16 @@ package_dual.py v1.1 | 2026-09-15 (v1.0 2026-02-10)
 
 Both hold {name}/SKILL.md at the root. validate_skill.py (beside this file) runs
 first; any error stops packaging. Left out: evals/ and tests/ at the skill root,
-*-workspace folders, __pycache__, node_modules, .git, .pytest_cache, *.pyc, OS junk.
+*-workspace folders, __pycache__, node_modules, .git, .pytest_cache, *.pyc, dotfiles
+(.gitignore, .env, .github/), OS junk. Text files (TEXT_SUFFIXES, or no NUL byte in
+the first 8 KB) are written with LF line endings whatever the checkout uses; binaries
+stay byte-for-byte; a script with a shebang is stored executable.
 
 --deploy HOME also replaces the contents of HOME/{name}/ with exactly what was
-packaged. The folder itself stays, so a junction or symlink an agent uses to reach
-it keeps working. It refuses to write through a link, or over a folder whose
-SKILL.md names a different skill.
+packaged, only when that folder is absent, empty, or holds a SKILL.md naming this
+same skill; anything else (another skill, a folder of other files, a file, a symlink
+or junction) is refused with a message and nothing changes. The folder itself stays,
+so a junction or symlink an agent uses to reach it keeps working.
 
 Usage:
     python package_dual.py <skill-folder> --version <X.Y> [--output <dir>] [--deploy <skills-home>] [--strict]
@@ -24,8 +32,10 @@ Usage:
 import argparse
 import fnmatch
 import importlib.util
+import os
 import re
 import shutil
+import stat
 import sys
 import zipfile
 from pathlib import Path
@@ -34,6 +44,10 @@ EXCLUDE_DIRS = {"__pycache__", "node_modules", ".git", ".pytest_cache"}
 ROOT_EXCLUDE_DIRS = {"evals", "tests"}
 EXCLUDE_GLOBS = {"*.pyc"}
 EXCLUDE_FILES = {".DS_Store", "Thumbs.db"}
+# Written with LF line endings whatever the checkout uses; so is any other file
+# with no NUL byte in its first 8 KB. Everything else is stored byte-for-byte.
+TEXT_SUFFIXES = {".md", ".txt", ".py", ".json", ".yaml", ".yml", ".sh", ".ps1",
+                 ".js", ".ts", ".css", ".html", ".csv", ".toml"}
 
 
 def _say(text=""):
@@ -61,7 +75,14 @@ def should_exclude(rel_path: Path) -> bool:
         return True
     if rel_path.name in EXCLUDE_FILES:
         return True
+    # Dotfiles and dot-folders (.gitignore, .env, .github/) belong to the checkout, not the skill.
+    if any(p.startswith(".") for p in parts[1:]):
+        return True
     return any(fnmatch.fnmatch(rel_path.name, pat) for pat in EXCLUDE_GLOBS)
+
+
+def _is_text(path: Path, head: bytes) -> bool:
+    return path.suffix.lower() in TEXT_SUFFIXES or b"\0" not in head
 
 
 def create_zip(skill_path: Path, output_path: Path) -> int:
@@ -73,7 +94,16 @@ def create_zip(skill_path: Path, output_path: Path) -> int:
             arcname = file_path.relative_to(skill_path.parent)
             if should_exclude(arcname):
                 continue
-            zf.write(file_path, arcname.as_posix())
+            data = file_path.read_bytes()
+            info = zipfile.ZipInfo.from_file(file_path, arcname.as_posix())
+            info.compress_type = zipfile.ZIP_DEFLATED
+            mode = 0o644
+            if _is_text(file_path, data[:8192]):
+                data = data.replace(b"\r\n", b"\n")
+                if data.startswith(b"#!"):
+                    mode = 0o755  # a script with a shebang is stored executable
+            info.external_attr = (stat.S_IFREG | mode) << 16
+            zf.writestr(info, data)
             count += 1
     return count
 
@@ -86,13 +116,31 @@ def _skill_name_in(folder: Path):
     return m.group(1).strip("'\"") if m else None
 
 
+def _is_link(path: Path) -> bool:
+    """A symlink, or on Windows any reparse point (a junction included), on every
+    Python from 3.10 up: Path.is_junction only exists from 3.12."""
+    if path.is_symlink():
+        return True
+    try:
+        attrs = os.lstat(path).st_file_attributes
+    except (OSError, AttributeError):
+        return False
+    return bool(attrs & stat.FILE_ATTRIBUTE_REPARSE_POINT)
+
+
 def deploy(archive: Path, skill_name: str, home: Path) -> Path:
     target = home / skill_name
-    if target.is_symlink() or (hasattr(target, "is_junction") and target.is_junction()):
+    if _is_link(target):
         raise RuntimeError(f"{target} is a link; deploy to the folder it points at instead")
-    existing = _skill_name_in(target) if target.is_dir() else None
-    if existing and existing != skill_name:
-        raise RuntimeError(f"{target} holds the skill '{existing}', not '{skill_name}'; nothing changed")
+    if target.exists() and not target.is_dir():
+        raise RuntimeError(f"{target} is a file, not a skill folder; nothing changed")
+    # Replace only what is absent, empty, or this same skill: one wrong --deploy
+    # argument must never empty a folder of somebody's other files.
+    if target.is_dir() and any(target.iterdir()):
+        existing = _skill_name_in(target)
+        if existing != skill_name:
+            held = f"holds the skill '{existing}'" if existing else "holds files that are not a skill (no SKILL.md)"
+            raise RuntimeError(f"{target} {held}, not '{skill_name}'; nothing changed")
     target.mkdir(parents=True, exist_ok=True)
     for child in target.iterdir():
         if child.is_dir() and not child.is_symlink():

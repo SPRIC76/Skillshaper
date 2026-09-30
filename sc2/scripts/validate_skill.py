@@ -2,25 +2,35 @@
 """
 Skill validator — the base skill-creator's upload rules plus Skillshaper's (sc2) standards.
 validate_skill.py v1.0 | 2026-09-15
+Updated: 2026-09-30 04:02 ET — v1.1: '.' validates under its own folder name; ./-prefixed paths are
+checked; a file that is not UTF-8 is an ERROR line and a BOM a warning; test files are
+exempt from the missing-reference check; unknown flags are a usage error; the user-folder
+check ignores letter case.
 
 Errors are what claude.ai or the Skills API would reject, or what leaves the
 skill broken: frontmatter keys and limits, a name that differs from its folder,
 angle brackets in the description, a body over 500 lines, a referenced file that
-does not exist, a bundled Python script that does not compile.
+does not exist (bare or ./-prefixed; test files - *_selftest.py, test_*.py,
+*_test.py, anything under tests/ - name throwaway fixtures and are exempt),
+a bundled Python script that does not compile, a file that is not UTF-8.
 
 Warnings are what makes a skill trigger badly or age badly: no "when to use" cue
 in the description (the description is all a model sees when it picks a skill),
 trigger phrases kept in the body instead, files nothing points to, long
-references without a contents list, and paths from sandboxes that no longer
-exist (/mnt/skills, /home/claude) or tool names only one surface has.
+references without a contents list, a UTF-8 BOM, and paths from sandboxes that
+no longer exist (/mnt/skills, /home/claude), one person's user folder in any
+letter case, or tool names only one surface has.
 
 Usage:
     python validate_skill.py <skill-folder> [<skill-folder> ...] [--strict]
 
-Exit 0 when no errors (and, with --strict, no warnings); 1 otherwise.
-Needs only the standard library; uses PyYAML for the frontmatter when present.
+Exit 0 when no errors (and, with --strict, no warnings); 1 otherwise; 2 for an
+unknown option. Needs only the standard library; uses PyYAML for the frontmatter
+when present.
 """
 
+import fnmatch
+import os
 import re
 import sys
 from pathlib import Path
@@ -30,7 +40,8 @@ JUNK_DIRS = {"__pycache__", "node_modules", ".pytest_cache"}
 JUNK_FILES = {".DS_Store", "Thumbs.db"}
 ROOT_SKIP_DIRS = {"evals", "tests"}
 BUNDLE_DIRS = ("references", "scripts", "assets")
-REF_PATTERN = re.compile(r"(?<![\w/.-])((?:references|scripts|assets)/[\w.\-/]*[\w])")
+# A bundled path, written bare or with a ./ prefix; ../ and foo/scripts/ stay out.
+REF_PATTERN = re.compile(r"(?<![\w/.-])(?:\./)?((?:references|scripts|assets)/[\w.\-/]*[\w])")
 WHEN_CUE = re.compile(r"\b(use (this skill )?(when|whenever|for|to)|trigger|apply when|invoke when)\b", re.I)
 STALE_MARKERS = {
     "/mnt/skills": "a claude.ai sandbox path that other surfaces do not have",
@@ -40,8 +51,9 @@ STALE_MARKERS = {
 }
 # One person's profile folder: breaks on every other machine and discloses the
 # account name wherever the skill is shared. Placeholders such as <you> pass.
-USER_PATH = re.compile(r"(?:[A-Za-z]:\\{1,2}Users\\{1,2}|/Users/|/home/)"
-                       r"(?!(?:claude|Public|Default|All Users)\b)([A-Za-z0-9._-]+)")
+# Case-insensitive: Windows paths are, and shells often print c:/users/....
+USER_PATH = re.compile(r"(?:[A-Za-z]:[\\/]{1,2}Users[\\/]{1,2}|/Users/|/home/)"
+                       r"(?!(?:claude|Public|Default|All Users)\b)([A-Za-z0-9._-]+)", re.I)
 
 
 def _parse_frontmatter(text):
@@ -92,9 +104,26 @@ def _mini_yaml(raw):
     return data
 
 
+def _read_utf8(path, rel, errors):
+    """Text of path, or None after an ERROR line naming the file and the bad byte."""
+    try:
+        return path.read_text(encoding="utf-8")
+    except UnicodeDecodeError as e:
+        errors.append(f"{rel} is not UTF-8 ({e.reason} at byte {e.start}); save it as UTF-8")
+        return None
+
+
+def _is_test_file(rel):
+    """Test code names fixtures that need not exist, so it skips the missing-reference check."""
+    return "tests" in rel.parts[:-1] or any(fnmatch.fnmatchcase(rel.name, pat)
+                                            for pat in ("*_selftest.py", "test_*.py", "*_test.py"))
+
+
 def check(skill_dir):
     """Return (errors, warnings) for one skill folder."""
-    skill = Path(skill_dir)
+    # abspath, not resolve(): '.' and '..' become the folder's own name, and a
+    # junction or symlink an agent reaches the skill through keeps its name.
+    skill = Path(os.path.abspath(skill_dir))
     errors, warnings = [], []
     md = skill / "SKILL.md"
     if not md.is_file():
@@ -107,11 +136,17 @@ def check(skill_dir):
         errors.append("more than one SKILL.md (claude.ai accepts exactly one): "
                       + ", ".join(str(p.relative_to(skill)) for p in nested))
 
-    text = md.read_text(encoding="utf-8")
+    text = _read_utf8(md, "SKILL.md", errors)
+    if text is None:
+        return errors, warnings
+    if text.startswith("\ufeff"):
+        text = text[1:]
+        warnings.append("SKILL.md starts with a UTF-8 byte-order mark (BOM); save it as plain UTF-8, "
+                        "which every surface reads")
     try:
         fm, body = _parse_frontmatter(text)
     except ValueError as e:
-        return [str(e)], []
+        return errors + [str(e)], warnings
 
     extra = set(fm) - ALLOWED_KEYS
     if extra:
@@ -155,12 +190,16 @@ def check(skill_dir):
             if p.is_file() and p.suffix.lower() in {".md", ".txt", ".py", ".json", ".sh", ".ps1", ".yaml", ".yml"}:
                 if set(p.relative_to(skill).parts) & JUNK_DIRS:
                     continue
-                texts[p] = p.read_text(encoding="utf-8", errors="replace")
+                t = _read_utf8(p, p.relative_to(skill).as_posix(), errors)
+                if t is not None:
+                    texts[p] = t
 
     for src, t in texts.items():
+        if src != md and _is_test_file(src.relative_to(skill)):
+            continue
         for ref in sorted(set(REF_PATTERN.findall(t))):
             if not (skill / ref).exists() and not (src.parent / ref).exists():
-                errors.append(f"{src.relative_to(skill)} references {ref}, which does not exist")
+                errors.append(f"{src.relative_to(skill).as_posix()} references {ref}, which does not exist")
 
     bundled = [p for d in BUNDLE_DIRS if (skill / d).is_dir() for p in (skill / d).rglob("*")
                if p.is_file() and not (set(p.relative_to(skill).parts) & JUNK_DIRS)]
@@ -169,13 +208,12 @@ def check(skill_dir):
         rel = p.relative_to(skill).as_posix()
         if rel not in everything and p.name not in everything:
             warnings.append(f"{rel} is not mentioned by SKILL.md or any other file (orphan)")
-        if p.suffix == ".md" and p.read_text(encoding="utf-8", errors="replace").count("\n") > 300:
-            head = p.read_text(encoding="utf-8", errors="replace")[:1500].lower()
-            if "contents" not in head:
+        if p.suffix == ".md" and p in texts and texts[p].count("\n") > 300:
+            if "contents" not in texts[p][:1500].lower():
                 warnings.append(f"{rel} is over 300 lines with no contents list")
-        if p.suffix == ".py":
+        if p.suffix == ".py" and p in texts:
             try:
-                compile(p.read_text(encoding="utf-8"), str(p), "exec")
+                compile(texts[p], str(p), "exec")
             except SyntaxError as e:
                 errors.append(f"{rel} does not compile: {e}")
 
@@ -201,6 +239,14 @@ def check(skill_dir):
 
 
 def main(argv):
+    if "-h" in argv or "--help" in argv:
+        print(__doc__)
+        return 0
+    unknown = [a for a in argv if a.startswith("-") and a != "--strict"]
+    if unknown:
+        print(f"unknown option: {' '.join(unknown)}\n"
+              "Usage: python validate_skill.py <skill-folder> [<skill-folder> ...] [--strict]")
+        return 2
     strict = "--strict" in argv
     folders = [a for a in argv if a != "--strict"]
     if not folders:
@@ -209,7 +255,7 @@ def main(argv):
     bad = False
     for f in folders:
         errors, warnings = check(f)
-        print(f"{Path(f).name}: {len(errors)} error(s), {len(warnings)} warning(s)")
+        print(f"{Path(os.path.abspath(f)).name}: {len(errors)} error(s), {len(warnings)} warning(s)")
         for e in errors:
             print(f"  ERROR  {e}")
         for w in warnings:
