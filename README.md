@@ -1,5 +1,7 @@
 # Skillshaper
 
+A skill is only as good as its trigger. Skillshaper checks yours against the open spec and packages it for any agent.
+
 An agent skill for **creating, improving, validating, and packaging** agent skills with stricter quality and **mandatory dual output**.
 
 **Voice:** Standards enforcer — quality and packaging, not creative writing.
