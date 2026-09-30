@@ -54,6 +54,9 @@ Updated: 2026-09-30 16:43 ET — v1.11: a skills home with no folder above it at
 refused before anything is built, never after with "nothing changed"; a first deploy's empty aside folder that
 cannot be removed is named as that, not as an old copy; the help and closing lines name no host and assume no
 skills folder (the Agent Skills format is for any agent).
+Updated: 2026-09-30 17:14 ET — v1.12: when the old copy could not be moved aside, nothing left it, so the message says
+nothing changed and names only the empty folder it could not remove (removed whenever it can be); old files
+are named as being in the aside folder only when some are still there.
 
   {name}.skill       for a host that installs a skill from an uploaded archive: upload
                       it in its skill settings, or open the file card an agent presents
@@ -598,14 +601,30 @@ def deploy(archive: Path, skill_name: str, home: Path, source=None) -> Path:
                 for child in list(target.iterdir()):
                     if child != aside and child not in stale:
                         _remove(child)
-            for n in moved:
+            for n in list(moved):
                 (aside / n).rename(target / n)
-            aside.rmdir()
+                moved.remove(n)
+            unpacking = False  # every old file is back and nothing new is left: only the empty aside folder remains
+            try:
+                aside.rmdir()
+            except OSError:
+                _remove(aside)  # a read-only flag is cleared; an ACL that denies it still stops here
             if created:
                 target.rmdir()
         except OSError as e2:
-            raise RuntimeError(f"{target} could not be replaced ({e.strerror or e}), and putting the old copy back "
-                               f"failed ({e2.strerror or e2}); the old files are in {aside}") from e2
+            # Say what happened: old files still aside, new files left behind, or only an empty folder.
+            if moved:
+                raise RuntimeError(f"{target} could not be replaced ({e.strerror or e}), and putting the old copy back "
+                                   f"failed ({e2.strerror or e2}); the old files not yet back are in {aside}") from e2
+            if unpacking:
+                raise RuntimeError(f"{target} could not be replaced ({e.strerror or e}), and taking the partly "
+                                   f"unpacked files out failed ({e2.strerror or e2}); no old file had been moved, so what "
+                                   "is left in it is from the new copy; delete it") from e2
+            if aside.exists():
+                raise RuntimeError(f"{target} could not be replaced ({e.strerror or e}); nothing changed, but the empty "
+                                   f"folder {aside} could not be removed ({e2.strerror or e2}); delete it") from e2
+            raise RuntimeError(f"{target} could not be replaced ({e.strerror or e}); nothing changed, but the empty "
+                               f"folder {target} could not be removed ({e2.strerror or e2}); delete it") from e2
         raise RuntimeError(f"{target} could not be replaced ({e.strerror or e}); the old copy is back, nothing "
                            "changed") from e
     try:

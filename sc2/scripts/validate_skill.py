@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Skill validator — the upload rules plus Skillshaper's (sc2) standards.
+Skill validator — the Agent Skills specification's rules plus Skillshaper's (sc2) standards.
 validate_skill.py v1.0 | 2026-09-15
 Updated: 2026-09-30 04:02 ET — v1.1: '.' validates under its own folder name; ./-prefixed paths are
 checked; a file that is not UTF-8 is an ERROR line and a BOM a warning; test files are
@@ -55,9 +55,16 @@ empty !!int) is an ERROR line naming what failed; the reserved-character message
 the tab message says the reader takes no tab anywhere, and a BOM and a line break YAML reads each get one
 sentence; the subset below names the key characters and cap, no tab, and one-line list items; the
 messages and help name no host (the Agent Skills format is for any agent).
+Updated: 2026-09-30 17:14 ET — v1.11: the Agent Skills specification's rules (agentskills.io/specification,
+read 2026-09-30): metadata a mapping of text keys to text values, license and allowed-tools text,
+compatibility 1-500 characters, each an ERROR line; the stricter rules some hosts apply on upload
+are named as theirs; a name that is a list or mapping is named so; a value a !! tag made is told to
+drop the tag; "Use before", "Use after" and "Use while" count as when-to-use cues; "honor", in American spelling.
 
-Errors are what an upload of the Agent Skills format would reject, or what leaves the
-skill broken: frontmatter keys and limits (and frontmatter that is not valid YAML,
+Errors are what the Agent Skills specification's rules exclude, what some hosts reject on upload
+(angle brackets in the description, more than one SKILL.md), or what leaves the
+skill broken: frontmatter keys and limits (metadata a mapping of text keys to text values,
+license and allowed-tools text, compatibility 1 to 500 characters; and frontmatter that is not valid YAML,
 read by PyYAML when it is installed; without it, the built-in reader reads this subset
 and refuses the rest by name with the way to write it, or pip install pyyaml -
 key: value values, the key of letters, digits, _ and - (or quoted without escapes), up to
@@ -158,7 +165,8 @@ _BLOCK_HEADER = re.compile(r"[|>](?:[+-][1-9]?|[1-9][+-]?)?(?: +#.*)?", re.S)
 _HEX = set("0123456789abcdefABCDEF")
 # A bundled path, written bare or with a ./ prefix; ../ and foo/scripts/ stay out.
 REF_PATTERN = re.compile(r"(?<![\w/.-])(?:\./)?((?:references|scripts|assets)/[\w.\-/]*[\w])")
-WHEN_CUE = re.compile(r"\b(use (this skill )?(when|whenever|for|to)|trigger(s|ed)?|apply when|invoke when)\b", re.I)
+WHEN_CUE = re.compile(r"\b(use (this skill |it )?(when|whenever|while|before|after|for|to)|trigger(s|ed)?|apply when"
+                      r"|invoke when)\b", re.I)
 STALE_MARKERS = {
     "/mnt/skills": "a hosted sandbox's path that other surfaces do not have",
     "/mnt/user-data": "a hosted sandbox's path that other surfaces do not have",
@@ -936,9 +944,10 @@ def _read_utf8(path, rel, errors):
 
 # Every released version opens its docstring with this line; only the owner's name in it has changed
 # (1.1: "plus sc2's standards."), and the words before "upload rules" (1.4's tenth review dropped the base
-# workflow's name), and a copy may start the docstring on the opening quotes' line.
-_SIGNATURE = re.compile(r"^(?:\"\"\"|''')?\s*Skill validator — the (?:base [\w-]+'s )?upload rules plus "
-                        r".{1,40} standards\.$")
+# workflow's name; the eleventh named the Agent Skills specification's rules), and a copy may start the
+# docstring on the opening quotes' line.
+_SIGNATURE = re.compile(r"^(?:\"\"\"|''')?\s*Skill validator — the (?:(?:base [\w-]+'s )?upload rules|Agent Skills "
+                        r"specification's rules) plus .{1,40} standards\.$")
 
 
 def _is_this_validator(path):
@@ -1020,6 +1029,44 @@ def _is_test_file(rel):
                                             for pat in ("*_selftest.py", "test_*.py", "*_test.py"))
 
 
+SPEC = "the Agent Skills specification"
+
+
+def _spec_shapes(fm):
+    """The optional keys' shapes, by the Agent Skills specification (https://agentskills.io/specification, read
+    2026-09-30): metadata is "a map from string keys to string values"; allowed-tools is "a space-separated
+    string"; license names a license or a bundled license file; compatibility "Must be 1-500 characters if
+    provided" (over 500 is checked in check()). The page says none of these as "should", so each is an ERROR line."""
+    errors = []
+    if "metadata" in fm:
+        meta = fm["metadata"]
+        if not isinstance(meta, dict):
+            kind = "text" if isinstance(meta, str) else _kind(meta)
+            errors.append(f"metadata is {kind}, not a mapping: {SPEC} takes key: value lines under it, each value "
+                          "text")
+        else:
+            for k, v in meta.items():
+                if not isinstance(k, str):
+                    errors.append(f"metadata key {_shown(k)} is {_kind(k)}, not text: {SPEC} takes text keys; "
+                                  "quote it")
+                elif not isinstance(v, str):
+                    advice = ("give it a value in quotes, or drop it" if v is None
+                              else "write it as one line of text" if isinstance(v, (list, dict, bytes, set))
+                              else "quote it")
+                    errors.append(f"metadata value {k} is {_kind(v)} ({_shown(v)}), not text: {SPEC} takes text "
+                                  f"values; {advice}")
+    for key, shape in (("license", "a license name or a bundled license file's name"),
+                       ("allowed-tools", "one space-separated string, such as Bash(git:*) Read")):
+        if key in fm and not isinstance(fm[key], str):
+            errors.append(f"{key} is {_kind(fm[key])}, not text: {SPEC} takes {shape}")
+    if "compatibility" in fm:
+        comp = fm["compatibility"]
+        if comp is None or (isinstance(comp, str) and not comp.strip()):
+            errors.append(f"compatibility is empty: {SPEC} takes 1 to 500 characters; write the requirement, or drop "
+                          "the key")
+    return errors
+
+
 def check(skill_dir, out=None):
     """Return (errors, warnings) for one skill folder; out, when package_dual.py passes its
     output folder, cuts a link out to the archives as the packager does."""
@@ -1034,7 +1081,7 @@ def check(skill_dir, out=None):
     tree = _tree(skill, out, errors)
     nested =[p for p in tree if p.name == "SKILL.md" and p != md and p.is_file()]
     if nested:
-        errors.append("more than one SKILL.md (an upload takes exactly one): "
+        errors.append("more than one SKILL.md (some hosts take exactly one on upload): "
                       + ", ".join(p.relative_to(skill).as_posix() for p in nested))
 
     text = _read_utf8(md, "SKILL.md", errors)
@@ -1060,7 +1107,9 @@ def check(skill_dir, out=None):
         errors.append(f"frontmatter keys not allowed: {', '.join(names)}")
 
     name = "" if fm.get("name") is None else _shown(fm["name"]).strip()
-    if not name:
+    if isinstance(fm.get("name"), (list, dict)):  # named as what it is, never quoted as if it were the name
+        errors.append(f"name is {_kind(fm['name'])} ({name}), not text: write the folder's kebab-case name")
+    elif not name:
         errors.append("frontmatter has no name")
     else:
         if not re.fullmatch(r"[a-z0-9]+(-[a-z0-9]+)*", name) or len(name) > 64:
@@ -1071,6 +1120,7 @@ def check(skill_dir, out=None):
     desc = fm.get("description")
     if desc is not None and not isinstance(desc, str):
         advice = ("write it as one line of text, or a > block" if isinstance(desc, (list, dict))
+                  else "a !! tag made it so; drop the tag" if isinstance(desc, (bytes, set))  # quoting keeps the tag
                   else "YAML reads it so unquoted; quote it")
         errors.append(f"description is {_kind(desc)} ({_shown(desc)}), not text: {advice}")
         desc = ""
@@ -1079,7 +1129,7 @@ def check(skill_dir, out=None):
         desc = ""
     desc = desc.strip()
     if "<" in desc or ">" in desc:
-        errors.append("description contains angle brackets (< or >), which upload rejects")
+        errors.append("description contains angle brackets (< or >), which some hosts reject on upload")
     if len(desc) > 1024:
         errors.append(f"description is {len(desc)} characters; the limit is 1024")
     if desc and not WHEN_CUE.search(desc):
@@ -1092,6 +1142,7 @@ def check(skill_dir, out=None):
         long_comp = True
     if long_comp:
         errors.append("compatibility is over 500 characters")
+    errors += _spec_shapes(fm)
 
     body_lines = body.count("\n") + 1
     if body_lines > 500:
@@ -1170,14 +1221,14 @@ def check(skill_dir, out=None):
         run = suffix in RUN_SUFFIXES or not p.suffix
         if source.startswith(BOM):
             # A BOM breaks a file where the first bytes carry meaning: a shell or the kernel does not
-            # honour a #! line that does not open the file (and the packager stores it without the
+            # honor a #! line that does not open the file (and the packager stores it without the
             # executable bit); a shell reads a BOM at the start of a .sh as part of the first command;
             # JSON forbids a BOM (json.loads rejects it). A .md or .ps1 is not run by its first line,
             # so a #! there is only text. Elsewhere it is a warning, except in a .ps1: Windows
             # PowerShell reads a UTF-8 script by its BOM and ANSI without one.
             if run and source.startswith(BOM + "#!"):
                 errors.append(f"{rel} has a UTF-8 byte-order mark (BOM) before its #! line, so a shell or the kernel "
-                              f"does not honour it (Windows' py launcher aside) and it is not stored executable; save "
+                              f"does not honor it (Windows' py launcher aside) and it is not stored executable; save "
                               f"it as plain UTF-8")
             elif suffix in SHELL_SUFFIXES:
                 errors.append(f"{rel} starts with a UTF-8 byte-order mark (BOM), which a shell reads as part of the "

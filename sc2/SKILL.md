@@ -8,7 +8,8 @@ description: >
   uploaded to a host, or deployed to a local skills folder - including "shape
   this skill", "package this skill", "make a .skill file", "check my skill",
   "why isn't my skill triggering", "upgrade my skills", or before handing any
-  skill to someone. Validates against the upload rules plus stricter checks
+  skill to someone. Validates against the Agent Skills specification plus
+  stricter checks
   (name equals folder, triggers in the description, every referenced file
   exists, no stale sandbox paths), then always produces both a .skill and a
   versioned .zip.
@@ -19,7 +20,7 @@ metadata:
 
 # Skillshaper (sc2) — Packaging & Quality Standards
 
-This skill is plain files: this SKILL.md and two Python 3 scripts that need only the standard library. Any agent that reads the Agent Skills format (a folder with a SKILL.md) and can run a script can use it, in any workflow and on any host. It works on its own, or on top of any skill-authoring workflow (capture intent, draft, test prompts, evals, description tuning): use that workflow for the writing and apply these standards on top.
+This skill is plain files: this SKILL.md and two Python scripts that need Python 3.10 or later and only the standard library. Any agent that reads the Agent Skills format (a folder with a SKILL.md) and can run a script can use it, in any workflow and on any host. It works on its own, or on top of any skill-authoring workflow (capture intent, draft, test prompts, evals, description tuning): use that workflow for the writing and apply these standards on top.
 
 ## 1. Validate before anything ships
 
@@ -29,7 +30,7 @@ python scripts/validate_skill.py <skill-folder> [--strict]
 
 | Level | Means |
 |-------|-------|
-| **Error** | Upload would be rejected, or the skill is broken; packaging stops. |
+| **Error** | The Agent Skills specification's rules exclude it, a host would reject it on upload, or the skill is broken; packaging stops. |
 | **Warning** | The skill will trigger badly or age badly; `--strict` treats each as an error. |
 
 **Errors:**
@@ -45,9 +46,10 @@ python scripts/validate_skill.py <skill-folder> [--strict]
 
   Anything else (a key such as `x.y:`, `allowed tools:` or `~:`, a tab, an anchor, alias or tag, a collection inside a list or a flow collection, a list of mappings, a list item over more than one line, a mapping nested deeper, a flow key without a value such as `{a}`, a quote continued at column 0 (on a line not indented past its key), a block header on the line below its key, a complex `? ` key, a date with a time, a comment inside `[ ]`, frontmatter over 100,000 characters) is refused by name with the way to write it, or read after `pip install pyyaml`. For any input the built-in reader returns exactly what PyYAML 6 returns, or refuses; it never guesses, and neither script stops on a traceback (a number too long to print, past Python's 4,300 digits, is shown by its size).
 - frontmatter keys other than `name`, `description`, `license`, `allowed-tools`, `metadata`, `compatibility`
-- `name` missing or null, not kebab-case, over 64 characters, or different from its folder
+- by the Agent Skills specification's rules (agentskills.io/specification): `metadata` that is not a mapping of text keys to text values (quote a version: `version: "1.4"`); `license` or `allowed-tools` that is not text (`allowed-tools` is one space-separated string, such as `Bash(git:*) Read`); `compatibility` empty or over 500 characters
+- `name` missing or null, not text, not kebab-case, over 64 characters, or different from its folder
 - a key YAML reads as a boolean, number or null (an unquoted `on:`, `yes:` or `1:`, and `~:` where PyYAML reads it), named as YAML types it
-- `description` missing or null; not text (an unquoted `1.4`, `yes` or `2026-09-30`, which YAML reads as a number, a boolean or a date: quote it; a list or mapping, named so); over 1024 characters; or containing angle brackets
+- `description` missing or null; not text (an unquoted `1.4`, `yes` or `2026-09-30`, which YAML reads as a number, a boolean or a date: quote it; a list or mapping, named so; a value a `!!` tag made, such as bytes: drop the tag); over 1024 characters; or containing angle brackets, which some hosts reject on upload
 - body over 500 lines
 - a referenced `references/`, `scripts/` or `assets/` path, bare or `./`-prefixed, that does not exist — checked in SKILL.md and in every other text file the package ships, a changelog at the root included (a name holding a space, or its `%20` form in a link, is resolved; test files — `*_selftest.py`, `test_*.py`, `*_test.py`, anything under a `tests/` folder — are exempt, since they name throwaway fixtures)
 - a referenced dotfile, which the package leaves out
@@ -55,11 +57,11 @@ python scripts/validate_skill.py <skill-folder> [--strict]
 - a SKILL.md or bundled text file that is not UTF-8
 - a bundled file that cannot be read, or a folder that cannot be listed (held open by another program, or no permission)
 - a UTF-8 BOM where it breaks the file: before the `#!` line of a script that is run by name (`.sh`, `.bash`, `.zsh`, `.py`, or no suffix), at the start of a `.sh`, `.bash` or `.zsh`, which a shell reads as part of the first command, or in a `.json`, which JSON forbids and `json.loads` rejects
-- more than one SKILL.md
+- more than one SKILL.md (some hosts take exactly one on upload)
 
 **Warnings:**
 
-- no "when to use" cue in the description
+- no "when to use" cue in the description ("Use when", "Use before", "Use after", "Use while", "Use for", "Use to", "Triggers on" and the like)
 - trigger phrases kept in the body
 - files nothing points to (orphans)
 - references over 300 lines without a contents list
@@ -86,7 +88,7 @@ Both are zip archives with `{name}/SKILL.md` at the root. The packager validates
 - **Left out:** `evals/` and `tests/` at the skill root, `*-workspace` folders, `__pycache__`, `node_modules`, `.git`, `.pytest_cache`, `.pyc` files, dotfiles such as `.gitignore` and `.env`, and OS junk (`.DS_Store`, `Thumbs.db`, `desktop.ini`, `__MACOSX`).
 - **Links:** a folder or file reached through a link (a junction or a symlink) is packaged like any other; a link back to a folder already on the way (a loop) or out to the archives is not followed.
 - **Line endings:** a file is written with LF whatever the checkout uses when all of it is UTF-8 text with no NUL byte and it is a text type (`.md`, `.txt`, `.py`, `.json`, `.yaml`, `.sh`, `.js`, `.html`, `.rst`, `.go` and the others listed in `TEXT_SUFFIXES`), a file with no suffix such as `LICENSE` or `Makefile`, or a script that starts with `#!`; every other file stays byte-for-byte, a PDF, a calendar file or a script carrying a binary payload included. A file that starts with `#!` is stored executable.
-- **Where the archives go:** outside the skill folder. Run from inside it, they go beside it (beside its real folder when the path given reaches the skill through a link that loops back into it), and a file linked in from beside it, or from beside the link the skill is reached through (a repository's `LICENSE`), is still packaged, since only the archives themselves are kept out. An `--output` inside the skill or inside the deploy target, or one that is a file, is refused, so an archive never packs itself or lands where the deploy replaces it. Run from inside `sc2/` with no `--output`, this skill's own archives land in its repository root, which `.gitignore` covers (`sc2.skill`, `sc2-v*.zip`, `dist/`).
+- **Where the archives go:** outside the skill folder. Run from inside it, they go beside it (beside its real folder when the path given reaches the skill through a link that loops back into it), and a file linked in from beside it, or from beside the link the skill is reached through (a repository's `LICENSE`), is still packaged, since only the archives themselves are kept out. An `--output` inside the skill or inside the deploy target, or one that is a file, is refused, so an archive never packs itself or lands where the deploy replaces it.
 - **Whole or not at all:** each archive is built under a temporary name beside its target, and the pair is moved into place only when both are complete, the earlier pair put back if either move fails.
 - **One message per failure:** a file or folder that cannot be read, an archive that cannot be replaced (an earlier one left read-only or held open, or a folder standing at its name), an `--output` that cannot be made or that takes no new file from this user, a skills home that takes no new folder from this user (or cannot be made, because the folder above it takes none, or because no folder above it exists at all, as on a drive or share that is not there), and a full disk each stop the run at once with one message naming the file and the reason, and the earlier archives are untouched.
 - **`--version`** takes digits, letters, dots and dashes, starting and ending with a digit or letter, at most 64 characters (`1.0`, `2.1-rc1`), so the `.zip` always lands in `--output` under a name every file system takes.
@@ -98,9 +100,9 @@ Both are zip archives with `{name}/SKILL.md` at the root. The packager validates
 
 ### Install examples
 
-Where a skill goes depends on the host, so these are examples, one of several each; the README lists more:
+Where a skill goes depends on the host, so these are examples, one of several each; the source repository's README lists more (https://github.com/SPRIC76/Skillshaper):
 
-- a skills folder the agent loads at start: `--deploy ~/.agents/skills`, `--deploy ~/.claude/skills`, or `--deploy ~/.cursor/skills` for every project, or a project's own `.agents/skills`;
+- a skills folder the agent loads at start: `--deploy ~/.agents/skills` (the shared location, which Codex reads), `--deploy ~/.claude/skills`, or `--deploy ~/.cursor/skills` for every project, or a project's own `.agents/skills`;
 - a host that installs by upload (claude.ai, for one): upload the `.skill`;
 - anything else: extract the `.zip` wherever that agent reads its skills.
 
@@ -128,7 +130,7 @@ Every skill has:
 
 - **Keep the name and folder** — agents and accounts know the skill by them.
 - **Snapshot before editing.** The snapshot is the baseline every change is measured against.
-- **Scripts get tests, and the test fails first.** Keep tests outside the skill folder (this repository keeps them in `tests/` beside `sc2/`) so packaged and deployed copies stay identical to the development copy.
+- **Scripts get tests, and the test fails first.** Keep tests outside the skill folder, so packaged and deployed copies stay identical to the development copy.
 - **Name every older copy.** A skill often lives in several places at once: the development folder, a local skills home, one or more hosted accounts, a public repository, project folders. After packaging, list each place still holding the old version and who can refresh it. An uploaded copy changes only when someone uploads the new `.skill`.
 
 ## With a skill-authoring workflow
@@ -137,4 +139,4 @@ Where the workflow packages a single archive, package both formats instead, and 
 
 ---
 
-*⁰ Formerly: skill-creator-plus → skill-creator-2 → sc2 v1.0 (2026-02-10) → sc2 v1.1 (2026-09-15: validator, deploy, every surface named instead of one sandbox) → Skill-Shaper, sc2 v1.2 (2026-09-28: the name its maker gave it; the id and folder stay sc2, per section 5) → Skillshaper, sc2 v1.3 (2026-09-30: one word, as its author writes it) → sc2 v1.4 (2026-09-30: its own `sc2/` folder so every skill directory finds it; deploy that refuses anything but its own skill; LF archives without dotfiles; test files exempt from the missing-reference check; written for any agent that reads SKILL.md, with no host assumed; the rest of ten independent reviews, each fix behind a test in `tests/`).*
+*⁰ Formerly: skill-creator-plus → skill-creator-2 → sc2 v1.0 (2026-02-10) → sc2 v1.1 (2026-09-15: validator, deploy, every surface named instead of one sandbox) → Skill-Shaper, sc2 v1.2 (2026-09-28: the name its maker gave it; the id and folder stay sc2, per section 5) → Skillshaper, sc2 v1.3 (2026-09-30: one word, as its author writes it) → sc2 v1.4 (2026-09-30: its own `sc2/` folder so every skill directory finds it; deploy that refuses anything but its own skill; LF archives without dotfiles; test files exempt from the missing-reference check; written for any agent that reads SKILL.md, with no host assumed; frontmatter held to the Agent Skills specification; the rest of eleven independent reviews, each fix behind a test).*

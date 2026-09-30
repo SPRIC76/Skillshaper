@@ -1,6 +1,6 @@
 # Skillshaper
 
-Enhanced agent skill for **creating, improving, validating, and packaging** agent skills with stricter quality and **mandatory dual output**.
+An agent skill for **creating, improving, validating, and packaging** agent skills with stricter quality and **mandatory dual output**.
 
 **Voice:** Standards enforcer — quality and packaging, not creative writing.
 
@@ -26,14 +26,14 @@ Skillshaper adds these to any skill-authoring workflow, or stands on its own:
 
 | Requirement | Detail |
 |-------------|--------|
-| Validation | `sc2/scripts/validate_skill.py` — the upload rules (frontmatter that is valid YAML, read by PyYAML when it is installed and otherwise by a built-in reader that takes a named subset and refuses the rest by name, see [Frontmatter without PyYAML](#frontmatter-without-pyyaml); allowed frontmatter keys, none that YAML types as a boolean, number or null, a kebab-case name equal to its folder, a description that is text, at most 1024 characters, with no angle brackets, a body under 500 lines) plus stricter checks: a when-to-use cue in the description, every referenced file present (in SKILL.md and every other text file the package ships; a name with a space, or its `%20` form in a link, resolved) and none a dotfile the package leaves out, bundled Python that compiles (`.py` in any letter case), UTF-8 throughout with any BOM named in every text file the package ships, root-level ones included (an error where it breaks the file: before the `#!` line of a script that is run by name, at the start of a `.sh`, or in a `.json`; a non-UTF-8 file outside `references/`, `scripts/` and `assets/` is a warning), every bundled file readable and every folder listable, no orphan or junk files, no sandbox paths or hard-coded user folders |
+| Validation | `sc2/scripts/validate_skill.py` — the [Agent Skills specification](https://agentskills.io/specification)'s rules (frontmatter that is valid YAML, read by PyYAML when it is installed and otherwise by a built-in reader that takes a named subset and refuses the rest by name, see [Frontmatter without PyYAML](#frontmatter-without-pyyaml); allowed frontmatter keys, none that YAML types as a boolean, number or null, a kebab-case name equal to its folder, a description that is text, at most 1024 characters, `metadata` a mapping of text to text, `license` and `allowed-tools` text, `compatibility` 1 to 500 characters, a body under 500 lines), the stricter rules some hosts apply on upload (no angle brackets in the description, one SKILL.md), plus stricter checks: a when-to-use cue in the description, every referenced file present (in SKILL.md and every other text file the package ships; a name with a space, or its `%20` form in a link, resolved) and none a dotfile the package leaves out, bundled Python that compiles (`.py` in any letter case), UTF-8 throughout with any BOM named in every text file the package ships, root-level ones included (an error where it breaks the file: before the `#!` line of a script that is run by name, at the start of a `.sh`, or in a `.json`; a non-UTF-8 file outside `references/`, `scripts/` and `assets/` is a warning), every bundled file readable and every folder listable, no orphan or junk files, no sandbox paths or hard-coded user folders |
 | Dual packaging | Every skill ships as `{name}.skill` **and** `{name}-vX.Y.zip`, validated first; any error stops packaging |
 | Local install | `--deploy <skills-home>` replaces an installed copy's contents in place, so links to that folder keep working; it touches only an absent or empty folder, or its own skill, and the skills home is always yours to name |
 | Documentation | Progressive disclosure; references stay scannable |
 
 ## Install (any agent)
 
-Copy the `sc2/` folder, keeping its name, into the folder your agent loads its skills from, or let the packager do it: `python sc2/scripts/package_dual.py sc2 --version 1.4 --output dist --deploy <skills-home>`. Some examples of that folder, one of several:
+Copy the `sc2/` folder, keeping its name, into the folder your agent loads its skills from, or let the packager do it: `python sc2/scripts/package_dual.py sc2 --version 1.4 --output dist --deploy <skills-home>`. The scripts need Python 3.10 or later and only the standard library. Some examples of that folder, one of several:
 
 | Agent | Skills folder (all projects, or one project) |
 |-------|-----------------------------------------------|
@@ -41,6 +41,8 @@ Copy the `sc2/` folder, keeping its name, into the folder your agent loads its s
 | Claude Code | `~/.claude/skills/sc2/` or `.claude/skills/sc2/` |
 | Cursor | `~/.cursor/skills/sc2/` or `.cursor/skills/sc2/` |
 | Codex | `~/.agents/skills/sc2/` or `.agents/skills/sc2/` (the shared location) |
+
+Any other runtime that loads folder-based skill instructions takes the same `sc2/` folder as a skill package. Where an IDE or agent has no skill system, run the validator and the packager from a terminal (see [Usage](#usage)).
 
 ### Install by upload
 
@@ -115,14 +117,6 @@ python -B -m unittest discover -s tests -v
 ```
 
 Standard library only; every fixture is built in a temporary folder. The tests live in `tests/` beside `sc2/`, not inside it, so packaged and deployed copies stay identical to the development copy. The frontmatter parity tests run the same table of shapes through the built-in reader and, where PyYAML is installed, through PyYAML; each shape's verdict was recorded from PyYAML 6.0.3, so the parity is checked without PyYAML too. A seeded differential test builds several thousand frontmatters from a grammar of fragments and mutations (the same list on every run) and, with PyYAML installed, holds the built-in reader to its promise on each: PyYAML's value and type, or a refusal by name; without PyYAML it checks that none crashes or hangs. On Windows, several tests set an ACL deny on a temporary folder with `icacls` and lift it afterwards; if a run is killed inside one, `icacls <folder> /remove:d %USERNAME%` frees the folder.
-
-## Other IDEs and agents
-
-Skillshaper can be used anywhere an agent runtime supports folder-based skill instructions:
-
-- Import/copy the `sc2/` folder as a skill package.
-- Ensure the runtime can run the scripts (Python 3.10+; standard library only).
-- If the IDE has no skill system, you can still run the validator and packager manually from a terminal.
 
 ## Pre-package checklist
 

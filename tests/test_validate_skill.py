@@ -16,6 +16,12 @@ Updated: 2026-09-30 16:43 ET — TenthReview: a number past Python's 4,300-digit
 lines on both paths; the reserved-character, tab and BOM messages; the docs' subset as the code reads it; SKILL.md names
 no host outside an install example and no other skill (with the check held to its job); each failed before its fix.
 NinthReview.TABLE's reserved-character verdicts now read "starts with '`'", the message's new form.
+Updated: 2026-09-30 17:14 ET — EleventhReview: SKILL.md names only what its package holds, or marks it with the repository's URL; the
+host and skill check catches the eleventh review's escapes (a maintained host list, rooted and skills-folder paths, slash
+commands, links, "the skill <Name>", Install and Uninstall sections only); the Agent Skills specification's shapes for
+metadata, license, allowed-tools and compatibility; the docs say the specification, not "the upload rules"; a value a !!
+tag made, a list name, the Python floor, one install section; "Use before", "Use after" and "Use while" as when-to-use
+cues; each failed before its fix. The parity tables allow only the specification's shape errors on their values.
 
 Run from the repository root:
     python -B -m unittest discover -s tests -v
@@ -749,14 +755,18 @@ class EighthReview(unittest.TestCase):
                         continue
                     fm, _ = validate_skill._parse_frontmatter(text)
                     errors, warnings = validate_skill.check(skill)
+                    # The shapes ride on metadata and allowed-tools; the reader's verdict is the value, and the only
+                    # errors left are the Agent Skills specification's shape rules on that value (EleventhReview).
+                    spec = validate_skill._spec_shapes(fm)
                     if verdict[0] == "text":
                         self.assertEqual(fm[verdict[1]], verdict[2])
-                        self.assertEqual(errors, [], errors)
+                        self.assertEqual(errors, spec, errors)
                         if verdict[1] == "description" and validate_skill.WHEN_CUE.search(verdict[2]):
                             self.assertFalse([w for w in warnings if "when to use" in w], warnings)
                     elif verdict[0] == "none":
                         self.assertIsNone(fm[verdict[1]], fm)
-                        self.assertEqual(errors, ["frontmatter has no description"] if verdict[1] == "description" else [], errors)
+                        self.assertEqual(errors, (["frontmatter has no description"] if verdict[1] == "description" else [])
+                                         + spec, errors)
                     else:
                         self.assertNotIsInstance(fm["description"], str)
                         self.assertEqual(len(errors), 1, errors)
@@ -800,7 +810,7 @@ class EighthReview(unittest.TestCase):
                 self.assertEqual(fm["name"], "good-skill")
 
     def test_the_bom_is_a_name_not_an_invisible_literal(self):
-        """A literal U+FEFF inside a string literal is invisible; an editor, a paste or a normalising tool can
+        """A literal U+FEFF inside a string literal is invisible; an editor, a paste or a normalizing tool can
         drop it without a visible diff, and the BOM rule would then never fire."""
         self.assertEqual(validate_skill.BOM, chr(0xFEFF))
         for path in (Path(validate_skill.__file__), Path(__file__)):
@@ -1260,17 +1270,27 @@ def _digits(n):
         sys.set_int_max_str_digits(saved)
 
 
-# Hosts and host paths: SKILL.md names one only in an install example, as one of several (any agent that reads
-# SKILL.md is its reader). Lowercase words, matched in any letter case.
-HOST_WORDS = re.compile(r"(?i)\b(?:claude|anthropic|cursor|codex|copilot|windsurf|gemini|openai|opencode|cline)\b"
-                        r"|~/\.agents\b")
+# Hosts: SKILL.md names one only in an install example, as one of several (any agent that reads SKILL.md is its
+# reader). A maintained list: add a host here when one ships. Matched in any letter case; a space may be absent.
+HOSTS = ("claude", "anthropic", "cursor", "codex", "chatgpt", "openai", "gemini", "copilot", "vs code", "windsurf",
+         "cline", "zed", "goose", "kiro", "amp", "roo code", "aider", "junie", "opencode", "continue.dev")
+HOST_WORDS = re.compile(r"\b(?:" + "|".join(re.escape(h).replace(r"\ ", r"\s*") for h in HOSTS) + r")\b", re.I)
+# A path from a root that differs by machine or host: ~/, %VAR%, $HOME, an absolute POSIX folder.
+ROOTED_PATH = re.compile(r"(?<![\w%$~/])(?:~[/\\]|%\w+%|\$\{?(?:HOME|USERPROFILE)\b)|(?<![\w.`/~-])/(?:opt|etc|usr|home"
+                         r"|Users|var|srv|root|Library)/", re.I)
+# A path token and the slash command: a token holding / or \ is split into its parts; "/name" alone is a command.
+PATH_TOKEN = re.compile(r"[^\s`'\"()\[\]]*[/\\][^\s`'\"()\[\]]*")
+SLASH_COMMAND = re.compile(r"(?<![\w/\\.~%$<{}-])/([A-Za-z][\w:-]*)(?![\w/\\-]|\.\w)")
+LINK = re.compile(r"\]\(([^)\s]+)\)|https?://[^\s)`>]+")
+OWN_SKILL = "sc2"
+OWN_URL = "https://github.com/SPRIC76/Skillshaper"
 # Every kebab-case word SKILL.md may use: its own id and former ids, format words and flags. Any other one is
 # taken for another skill's name and fails; a new word is added here only after reading it.
 SKILL_MD_WORDS = {
     "skill-creator-plus", "skill-creator-2", "skill-shaper",  # its own former ids and name, in the footnote
     "skill-authoring", "allowed-tools", "kebab-case", "byte-order", "2.1-rc1", "sc2-v", "read-only", "utf-8",
     "built-in", "double-quoted", "root-level", "byte-for-byte", "anti-patterns", "user-friendly",
-    "missing-reference", "skill-folder", "skills-home",
+    "missing-reference", "skill-folder", "skills-home", "space-separated",
 }
 # The word before "skill" or "skills": a name there ("the verify skill") is another skill's; these are not.
 SKILL_WORDS_BEFORE = {"a", "an", "the", "this", "that", "any", "each", "every", "one", "own", "same", "its", "another",
@@ -1280,26 +1300,51 @@ SKILL_WORDS_BEFORE = {"a", "an", "the", "this", "that", "any", "each", "every", 
 
 def _named_hosts_and_skills(text):
     """Every line of text that names a host outside an install example, or another skill: [(line number, what)].
-    An install example is a section whose heading says Install, up to the next heading at its level or above."""
+
+    An install example is a section whose heading holds the word Install or Uninstall ("Installed copies" is not
+    one), up to the next heading at its level or above. Outside one, it finds a host from HOSTS, a path from a root
+    that differs by machine (~/, %VAR%, $HOME, /opt/ and the like) and any path through a skills folder. Anywhere,
+    it finds another skill: a skills-folder path naming a skill other than sc2, a slash command, a link to anything
+    but sc2's own repository, a kebab-case word not in SKILL_MD_WORDS, "<word> skill" and "the skill <Name>".
+    Its bound: a made-up one-word name with nothing around it ("Pair it with Lintfox") is any capitalized word to a
+    pattern; a reader catches that one."""
     found, install_level = [], None
     for number, line in enumerate(text.split("\n"), 1):
-        heading = re.match(r"(#+) ", line)
+        heading = re.match(r"(#+)\s+(.*)", line)
         if heading:
             level = len(heading.group(1))
             if install_level is not None and level <= install_level:
                 install_level = None
-            if "install" in line.lower():
+            if re.search(r"\b(?:un)?install\b", heading.group(2), re.I):
                 install_level = level
-        if install_level is None:
-            for m in HOST_WORDS.finditer(line):
-                found.append((number, f"host {m.group()}"))
+        outside = install_level is None
+        if outside:
+            found += [(number, f"host {m.group()}") for m in HOST_WORDS.finditer(line)]
+            found += [(number, f"host path {m.group()}") for m in ROOTED_PATH.finditer(line)]
+        for token in PATH_TOKEN.findall(line):
+            if token.startswith(("http://", "https://")):
+                continue
+            parts = [p for p in re.split(r"[/\\]", token.rstrip(".,;:")) if p]
+            lowered = [p.lower() for p in parts]
+            if "skills" in lowered:
+                after = parts[lowered.index("skills") + 1:]
+                if after and after[0] != OWN_SKILL and not after[0].startswith(("<", "{")):
+                    found.append((number, f"skills-folder path to {after[0]}"))
+                elif outside:
+                    found.append((number, f"skills-folder path {token}"))
+        found += [(number, f"slash command /{m.group(1)}") for m in SLASH_COMMAND.finditer(line)]
+        for m in LINK.finditer(line):
+            target = m.group(1) or m.group()
+            if not target.startswith(OWN_URL) and not target.startswith("#"):
+                found.append((number, f"link {target}"))
         for word in re.findall(r"(?<![\w./-])[A-Za-z0-9][A-Za-z0-9.]*(?:-[A-Za-z0-9.]*)+", line):
             word = word.rstrip(".-")  # "single- or double-quoted": a word cut at its dash
             if "-" in word and word.lower() not in SKILL_MD_WORDS and not re.fullmatch(r"[\d.-]+", word):
                 found.append((number, f"kebab-case name {word}"))
-        for m in re.finditer(r"\b([A-Za-z][\w-]*)`?\s+skills?\b", line):
+        for m in re.finditer(r"\b([A-Za-z][\w-]*)`?\s+skills?(?![\w-])", line):
             if m.group(1).lower() not in SKILL_WORDS_BEFORE:
                 found.append((number, f"'{m.group(1)} skill'"))
+        found += [(number, f"'skill {m.group(1)}'") for m in re.finditer(r"\bskills?\s+([A-Z][\w-]*)", line)]
     return found
 
 
@@ -1455,6 +1500,221 @@ class TenthReview(unittest.TestCase):
             with self.subTest(label):
                 self.assertNotEqual(_named_hosts_and_skills(text), [])
         self.assertEqual(_named_hosts_and_skills("## Install examples\n\nclaude.ai, Cursor or Codex.\n"), [])
+
+
+REPO_URL = "https://github.com/SPRIC76/Skillshaper"
+
+
+class EleventhReview(unittest.TestCase):
+    """The eleventh review (cbeb000): SKILL.md reads complete without the repository it comes from; the host and skill
+    check catches what it claims; the frontmatter keys follow the Agent Skills specification (agentskills.io/specification,
+    read 2026-09-30); the wording items. And a description that says "Use before ..." names when to use it."""
+
+    # Where SKILL.md names one of the repository's own files as an example that holds for any skill, not as a pointer
+    # to this repository. Each fragment was read before it was added here.
+    GENERIC = ("dotfiles such as `.gitignore` and `.env`", "`evals/` and `tests/` at the skill root",
+               "`tests/` or `evals/` at its root", "anything under a `tests/` folder", "(`LICENSE`, `README.md`)",
+               "a `.gitignore` that packagers before 1.4 shipped", "such as `LICENSE` or `Makefile`",
+               "(a repository's `LICENSE`)")
+
+    def _check(self, tmp, label, frontmatter):
+        skill = make_skill(Path(tmp) / label, md_bytes=f"---\n{frontmatter}---\n\n# Body\n".encode("utf-8"))
+        return validate_skill.check(skill)
+
+    def test_skill_md_names_only_what_its_package_holds_or_marks_it_repository_only(self):
+        """N1: the package holds SKILL.md and scripts/ only, yet SKILL.md said its archives land in "its repository
+        root, which `.gitignore` covers", that "the README lists more", and that "this repository keeps them in
+        `tests/`"; a copy installed from the .skill has none of those. A line naming the repository or one of its own
+        files outside sc2/ must carry the repository's URL; a path into the skill must exist in sc2/."""
+        sc2 = REPO / "sc2"
+        repo_only = sorted({".gitignore", "LICENSE", "README.md", "tests"}
+                           | {p.name for p in REPO.iterdir() if p.name not in ("sc2", ".git")})
+        mentions = re.compile("|".join([r"`" + re.escape(n) + r"/?`" for n in repo_only]
+                                       + [r"(?i:\b(?:the|this|its) (?:README|repository)\b)", r"(?i:\brepository root\b)"]))
+        text = (sc2 / "SKILL.md").read_text(encoding="utf-8")
+        found = []
+        for number, line in enumerate(text.split("\n"), 1):
+            rest = line
+            for fragment in self.GENERIC:
+                rest = rest.replace(fragment, "")
+            if REPO_URL not in line:
+                found += [(number, m.group()) for m in mentions.finditer(rest)]
+                found += [(number, m.group(1)) for m in re.finditer(r"(?<![\w/.])((?:scripts|references|assets)/[\w./-]*\w)",
+                                                                    line) if not (sc2 / m.group(1)).exists()]
+        self.assertEqual(found, [])
+
+    # Reviewer 11's lines, each inserted outside the install examples and each missed at cbeb000.
+    ESCAPES = {
+        "a host the list lacked: ChatGPT": "Upload the .skill in ChatGPT.",
+        "a host the list lacked: VS Code": "In VS Code, open the command palette and run it.",
+        "a host the list lacked: Goose": "Goose users run it the same way.",
+        "a host the list lacked: Kiro": "Kiro loads it from its steering folder.",
+        "a host path: ~/.config/agents/skills": "Deploy to ~/.config/agents/skills.",
+        "a host path: %USERPROFILE%": "Deploy to %USERPROFILE%" + chr(92) + "skills.",
+        "an assumed absolute skills folder": "Deploy to /opt/skills.",
+        "another skill as a slash command": "Run /skill-drafter first.",
+        "another skill: 'the skill Lintfox'": "Hand it to the skill Lintfox.",
+        "another skill in a markdown link": "See [Lintfox](https://example.com/lintfox).",
+        "a host under an 'Installed copies' heading": "## Installed copies\n\nIn Claude Code, remove the folder.",
+    }
+
+    def test_the_host_and_skill_check_catches_each_escape(self):
+        """N2: each line above passed the check at cbeb000 while its docstring claimed it found hosts and other skills.
+        Its bound: a made-up one-word skill name ("Pair it with Lintfox for the checks.") reads as any capitalized
+        word, so no pattern tells it from a word the text needs; a reader, not this check, catches that one."""
+        base = (REPO / "sc2" / "SKILL.md").read_text(encoding="utf-8")
+        anchor = "## 1. Validate before anything ships"
+        for label, line in self.ESCAPES.items():
+            with self.subTest(label):
+                self.assertNotEqual(_named_hosts_and_skills(base.replace(anchor, f"{line}\n\n{anchor}", 1)), [])
+
+    def test_an_install_or_uninstall_section_is_the_examples_section_and_nothing_else_is(self):
+        """N2: any heading holding "install" exempted its section ("Installed copies" too); now a heading whose words
+        include Install or Uninstall does, and the section ends at the next heading at its level or above."""
+        for heading in ("## Install", "## Uninstall", "### Install examples", "## Install (any agent)"):
+            with self.subTest(heading):
+                self.assertEqual(_named_hosts_and_skills(f"{heading}\n\nIn Claude Code, ChatGPT or VS Code.\n"), [])
+        for heading in ("## Installed copies", "## Reinstalling", "## Use"):
+            with self.subTest(heading):
+                self.assertNotEqual(_named_hosts_and_skills(f"{heading}\n\nIn Claude Code, remove the folder.\n"), [])
+        self.assertNotEqual(_named_hosts_and_skills("## Install\n\nCursor\n\n# Next\n\nIn Zed, run it.\n"), [])
+
+    def test_the_host_list_is_matched_in_any_letter_case(self):
+        for host in ("Claude", "claude.ai", "Cursor", "CURSOR", "Codex", "ChatGPT", "Gemini", "Copilot", "VS Code",
+                     "vscode", "Windsurf", "Cline", "Zed"):
+            with self.subTest(host):
+                self.assertTrue(HOST_WORDS.search(f"Open it in {host} first."), host)
+
+    def test_a_skills_folder_path_names_another_skill_unless_it_is_sc2s_own(self):
+        """N2: a path into a skills folder names the skill after it; only sc2's own is allowed, and only in the
+        install examples."""
+        self.assertEqual(_named_hosts_and_skills("## Install\n\n`~/.agents/skills/sc2/` or `.agents/skills/`\n"), [])
+        for line in ("`~/.agents/skills/lintfox/`", "`skills/lintfox`", "`.cursor/skills/skill-drafter/SKILL.md`"):
+            with self.subTest(line):
+                self.assertNotEqual(_named_hosts_and_skills(f"## Install\n\n{line}\n"), [])
+
+    def test_a_kebab_name_is_not_also_read_as_the_word_before_skill(self):
+        """N2: "with skill-drafter" was found twice, once as "'with skill'", a false second finding."""
+        self.assertEqual(_named_hosts_and_skills("# Title\n\nPair it with skill-drafter.\n"),
+                         [(3, "kebab-case name skill-drafter")])
+
+    # The Agent Skills specification (agentskills.io/specification, read 2026-09-30): metadata is "a map from string
+    # keys to string values"; allowed-tools is "a space-separated string"; license names a license or a bundled
+    # license file; compatibility "Must be 1-500 characters if provided".
+    SPEC = {
+        "metadata-number": ("metadata:\n  version: 1.4", "metadata value version is a number (1.4), not text"),
+        "metadata-list-value": ("metadata:\n  tags: [a, b]", "metadata value tags is a list"),
+        "metadata-mapping-value": ("metadata:\n  a: {b: c}", "metadata value a is a mapping"),
+        "metadata-number-key": ("metadata:\n  1: one", "metadata key 1 is a number, not text"),
+        "metadata-list": ("metadata: [a, b]", "metadata is a list, not a mapping"),
+        "metadata-text": ("metadata: author example-org", "metadata is text, not a mapping"),
+        "allowed-tools-list": ("allowed-tools: [Read, Write]", "allowed-tools is a list, not text"),
+        "allowed-tools-number": ("allowed-tools: 2", "allowed-tools is a number, not text"),
+        "license-number": ("license: 2", "license is a number, not text"),
+        "license-list": ("license: [MIT]", "license is a list, not text"),
+        "compatibility-empty": ("compatibility: ''", "compatibility is empty"),
+        "compatibility-null": ("compatibility:", "compatibility is empty"),
+        "compatibility-blank": ("compatibility: '   '", "compatibility is empty"),
+    }
+
+    def _spec(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            for label, (extra, said) in self.SPEC.items():
+                with self.subTest(label):
+                    errors, _ = self._check(tmp, label, f"name: good-skill\ndescription: Use when asked.\n{extra}\n")
+                    self.assertEqual(len(errors), 1, errors)
+                    self.assertIn(said, errors[0])
+                    self.assertIn("the Agent Skills specification", errors[0])
+            for label, extra in (("spec-example", "license: Apache-2.0\nmetadata:\n  author: example-org\n  version: \"1.0\""),
+                                 ("tools", "allowed-tools: Bash(git:*) Bash(jq:*) Read"),
+                                 ("compat", "compatibility: Requires Python 3.10 or later")):
+                with self.subTest(label):
+                    self.assertEqual(self._check(tmp, label, f"name: good-skill\ndescription: Use when asked.\n{extra}\n"),
+                                     ([], []))
+
+    def test_the_specifications_shapes_are_errors_without_pyyaml(self):
+        """N3: each shape above passed with 0 errors and 0 warnings at cbeb000."""
+        with without_pyyaml():
+            self._spec()
+
+    @unittest.skipUnless(_has_pyyaml(), "PyYAML is not installed here")
+    def test_the_specifications_shapes_are_errors_with_pyyaml(self):
+        self._spec()
+
+    def test_the_docs_say_the_specification_not_the_upload_rules(self):
+        """N3: "the upload rules" stood for the open specification; a host's stricter rule is named as a host's."""
+        texts = {"SKILL.md": (REPO / "sc2" / "SKILL.md").read_text(encoding="utf-8"),
+                 "README.md": (REPO / "README.md").read_text(encoding="utf-8"),
+                 "validate_skill.py": (SCRIPTS / "validate_skill.py").read_text(encoding="utf-8")}
+        for name, text in texts.items():
+            with self.subTest(name):
+                flat = " ".join(text.split())
+                self.assertNotIn("the upload rules", flat)
+                self.assertNotIn("which upload rejects", flat)
+                self.assertNotIn("an upload takes exactly one", flat)
+                self.assertIn("Agent Skills specification", flat)
+        first = validate_skill.__doc__.strip().splitlines()[0]
+        self.assertEqual(first, "Skill validator — the Agent Skills specification's rules plus Skillshaper's (sc2) "
+                                "standards.")
+        self.assertTrue(validate_skill._SIGNATURE.match(first))
+        with tempfile.TemporaryDirectory() as tmp:
+            errors, _ = self._check(tmp, "angle", "name: good-skill\ndescription: Use when <asked>.\n")
+            self.assertEqual(errors, ["description contains angle brackets (< or >), which some hosts reject on upload"])
+
+    @unittest.skipUnless(_has_pyyaml(), "PyYAML is not installed here")
+    def test_a_value_a_tag_made_is_told_to_drop_the_tag(self):
+        """N5: `!!binary '@@@'` said "YAML reads it so unquoted; quote it", but quoting keeps the tag and its bytes."""
+        with tempfile.TemporaryDirectory() as tmp:
+            for label, value, kind in (("binary", "!!binary '@@@'", "bytes"), ("set", "!!set {a}", "set")):
+                with self.subTest(label):
+                    errors, _ = self._check(tmp, label, f"name: good-skill\ndescription: {value}\n")
+                    self.assertEqual(len(errors), 1, errors)
+                    self.assertTrue(errors[0].startswith(f"description is {kind} ("), errors)
+                    self.assertTrue(errors[0].endswith("not text: a !! tag made it so; drop the tag"), errors)
+
+    def test_a_list_name_is_described_as_a_list(self):
+        """N5: `name: [<huge hex>]` gave "name 'too long to show' must be kebab-case", as if that were the name."""
+        with without_pyyaml(), tempfile.TemporaryDirectory() as tmp:
+            errors, _ = self._check(tmp, "big", f"name: [{TenthReview.BIG_HEX}]\ndescription: Use when asked.\n")
+            self.assertEqual(errors, ["name is a list (too long to show), not text: write the folder's kebab-case name"])
+            errors, _ = self._check(tmp, "small", "name: [good-skill]\ndescription: Use when asked.\n")
+            self.assertEqual(errors, ["name is a list (['good-skill']), not text: write the folder's kebab-case name"])
+            errors, _ = self._check(tmp, "map", "name: {a: b}\ndescription: Use when asked.\n")
+            self.assertEqual(errors, ["name is a mapping ({'a': 'b'}), not text: write the folder's kebab-case name"])
+
+    def test_the_docs_give_the_python_floor_and_one_install_section(self):
+        """N5: SKILL.md said "two Python 3 scripts" and the README "Python 3.10+" under a separate "Other IDEs and
+        agents" section; the README opened with "Enhanced agent skill", a comparison without its object."""
+        skill_md = (REPO / "sc2" / "SKILL.md").read_text(encoding="utf-8")
+        readme = (REPO / "README.md").read_text(encoding="utf-8")
+        for name, text in (("SKILL.md", skill_md), ("README.md", readme)):
+            with self.subTest(name):
+                self.assertIn("Python 3.10 or later", text)
+                self.assertNotRegex(text, r"Python 3(?:\.10\+| scripts)")
+        self.assertNotIn("Enhanced", readme)
+        self.assertIn("\nAn agent skill for ", readme)
+        self.assertNotIn("## Other IDEs and agents", readme)
+        install = readme.split("## Install (any agent)", 1)[1].split("\n## ", 1)[0]
+        self.assertIn("Python 3.10 or later", install)
+        self.assertIn("from a terminal", install)
+
+    def test_use_before_after_while_for_and_to_are_when_to_use_cues(self):
+        """Coordinator, 2026-09-30: "Use before saying done ..." was warned as naming no when-to-use; so were "Use
+        after" and "Use while". A description with no when-to-use phrase is still warned."""
+        with tempfile.TemporaryDirectory() as tmp:
+            for n, desc in enumerate(("Checks work. Use before saying done.", "Checks work. Use after a deploy.",
+                                      "Checks work. Use while a review runs.", "Checks work. Use whenever code changes.",
+                                      "Checks work. Use for any release.", "Checks work. Use to verify a claim.",
+                                      "Checks work. Use it before a push.", "Checks work. Use this skill before a push.")):
+                with self.subTest(desc):
+                    self.assertEqual(self._check(tmp, f"cue{n}", f"name: good-skill\ndescription: {desc}\n"), ([], []))
+            for n, desc in enumerate(("Checks work before a release.", "Packages skills into archives.",
+                                      "A user before anything else.", "Useful before a push.")):
+                with self.subTest(desc):
+                    errors, warnings = self._check(tmp, f"none{n}", f"name: good-skill\ndescription: {desc}\n")
+                    self.assertEqual(errors, [])
+                    self.assertEqual(len(warnings), 1, warnings)
+                    self.assertTrue(warnings[0].startswith("description says what the skill is but not when"), warnings)
 
 
 if __name__ == "__main__":

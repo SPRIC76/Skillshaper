@@ -12,6 +12,9 @@ when it cannot be removed, a deploy failure's reason in words; the date lines' n
 Updated: 2026-09-30 16:43 ET — TenthReview: a skills home on a drive that does not exist, refused before anything is built; a
 first deploy's empty aside folder named as that, not as an old copy; the help and closing lines naming no host; each
 failed before its fix.
+Updated: 2026-09-30 17:14 ET — EleventhReview: a first move aside that fails reported as nothing changed, with the empty folder
+named or removed; the help and closing lines held to the validator tests' maintained host list in any letter case; each
+failed before its fix (the host list on a closing line naming "Cursor").
 
 Run from the repository root:
     python -B -m unittest discover -s tests -v
@@ -473,7 +476,7 @@ class FourthReview(unittest.TestCase):
     def _packaged(self, tmp):
         return package(make_skill(Path(tmp) / "src", files={"scripts/run.py": "print(1)\n"}), Path(tmp) / "out")
 
-    def test_a_licence_linked_from_the_repo_root_survives_archives_written_beside_the_skill(self):
+    def test_a_license_linked_from_the_repo_root_survives_archives_written_beside_the_skill(self):
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp) / "repo"
             skill = make_skill(repo)
@@ -610,7 +613,7 @@ class FifthReview(unittest.TestCase):
             self.assertIn(".envrc", str(cm.exception))
             self.assertTrue((target / ".envrc").is_file())
 
-    def test_a_licence_beside_a_skill_reached_through_a_link_ships(self):
+    def test_a_license_beside_a_skill_reached_through_a_link_ships(self):
         with tempfile.TemporaryDirectory() as tmp:
             repo, work = Path(tmp) / "repo", Path(tmp) / "work"
             real = make_skill(repo)
@@ -1397,6 +1400,101 @@ class TenthReview(unittest.TestCase):
             self.assertNotIn(host, helped)
         self.assertIn(".zip   → keep; extract it into your agent's skills folder so it lands as <skills-folder>/good-skill/",
                       text)
+
+
+def _host_words():
+    """The maintained host list, from the validator's tests, so both suites hold one list."""
+    spec = importlib.util.spec_from_file_location("_hosts_from_validator_tests",
+                                                  Path(__file__).resolve().parent / "test_validate_skill.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod.HOST_WORDS
+
+
+class EleventhReview(unittest.TestCase):
+    """The eleventh review (cbeb000): a first move aside that fails is reported as what happened, and the closing
+    lines and help are held to the maintained host list in any letter case."""
+
+    def _run(self, *argv):
+        printed = io.StringIO()
+        with contextlib.redirect_stdout(printed):
+            rc = package_dual.main([str(a) for a in argv])
+        return rc, printed.getvalue()
+
+    def test_the_closing_lines_and_the_help_name_no_host_in_any_letter_case(self):
+        """N2: the tenth review's check listed "cursor" and "codex" in lower case only, so a closing line naming
+        "Cursor" passed it."""
+        hosts = _host_words()
+        with tempfile.TemporaryDirectory() as tmp:
+            rc, text = self._run(make_skill(Path(tmp) / "src"), "--version", "1.0", "--output", Path(tmp) / "out")
+        self.assertEqual(rc, 0, text)
+        helped = package_dual.__doc__ + text
+        self.assertEqual([m.group() for m in hosts.finditer(helped)], [])
+        self.assertNotIn("~/.agents", helped)
+        self.assertTrue(hosts.search("upload in Cursor or wherever a host installs skills"))
+
+    def test_a_first_move_aside_that_fails_says_nothing_changed_and_names_the_empty_folder(self):
+        """N4: when the first file could not be moved aside, nothing had left the installed copy, yet the message
+        said "putting the old copy back failed ... the old files are in .old-...", an empty folder."""
+        real_rename, real_rmdir, real_remove = Path.rename, Path.rmdir, package_dual._remove
+        denied = PermissionError(13, "Access is denied")
+
+        def rename(self, dest):
+            if Path(dest).parent.name.startswith(".old-"):
+                raise denied
+            return real_rename(self, dest)
+
+        def rmdir(self):
+            if self.name.startswith(".old-"):
+                raise denied
+            return real_rmdir(self)
+
+        def remove(path):
+            if Path(path).name.startswith(".old-"):
+                raise denied
+            return real_remove(path)
+        with tempfile.TemporaryDirectory() as tmp:
+            skill = make_skill(Path(tmp) / "src")
+            home = Path(tmp) / "home"
+            rc, text = self._run(skill, "--version", "1.0", "--output", Path(tmp) / "out", "--deploy", home)
+            self.assertEqual(rc, 0, text)
+            target = home / "good-skill"
+            Path.rename, Path.rmdir, package_dual._remove = rename, rmdir, remove
+            try:
+                rc, text = self._run(skill, "--version", "1.1", "--output", Path(tmp) / "out", "--deploy", home)
+            finally:
+                Path.rename, Path.rmdir, package_dual._remove = real_rename, real_rmdir, real_remove
+            self.assertEqual(rc, 1, text)
+            aside = [p for p in target.iterdir() if p.name.startswith(".old-")]
+            self.assertEqual(len(aside), 1, aside)
+            self.assertEqual(list(aside[0].iterdir()), [])
+            self.assertIn(f"❌ Deploy refused: {target} could not be replaced (Access is denied); nothing changed, but "
+                          f"the empty folder {aside[0]} could not be removed (Access is denied); delete it", text)
+            self.assertNotIn("the old files are in", text)
+            self.assertNotIn("putting the old copy back", text)
+            self.assertTrue((target / "SKILL.md").is_file())
+
+    def test_a_first_move_aside_that_fails_leaves_no_empty_folder_when_it_can_be_removed(self):
+        """N4: the empty folder is removed whenever it can be; only the file that would not move is reported."""
+        real_rename = Path.rename
+
+        def rename(self, dest):
+            if Path(dest).parent.name.startswith(".old-"):
+                raise PermissionError(13, "Access is denied")
+            return real_rename(self, dest)
+        with tempfile.TemporaryDirectory() as tmp:
+            skill = make_skill(Path(tmp) / "src")
+            home = Path(tmp) / "home"
+            rc, text = self._run(skill, "--version", "1.0", "--output", Path(tmp) / "out", "--deploy", home)
+            self.assertEqual(rc, 0, text)
+            Path.rename = rename
+            try:
+                rc, text = self._run(skill, "--version", "1.1", "--output", Path(tmp) / "out", "--deploy", home)
+            finally:
+                Path.rename = real_rename
+            self.assertEqual(rc, 1, text)
+            self.assertIn("could not be replaced (Access is denied); the old copy is back, nothing changed", text)
+            self.assertEqual([p.name for p in (home / "good-skill").iterdir() if p.name.startswith(".old-")], [])
 
 
 if __name__ == "__main__":
