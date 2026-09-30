@@ -368,5 +368,39 @@ class FourthReview(unittest.TestCase):
             self.assertEqual(sorted(e.split(" ")[0] for e in errors), ["scripts/greet.sh", "scripts/wide.sh"], errors)
 
 
+class FifthReview(unittest.TestCase):
+    """The fifth review (3814807): what Python runs, what the package ships, and one junk file named once."""
+
+    def test_a_bundled_script_saved_with_a_bom_compiles_and_the_bom_is_a_warning(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            skill = make_skill(tmp, body="Run scripts/bom.py.", files={"scripts/bom.py": b"\xef\xbb\xbfprint('bom ok')\n"})
+            errors, warnings = validate_skill.check(skill)
+            self.assertEqual(errors, [])
+            self.assertTrue([w for w in warnings if "scripts/bom.py" in w and "byte-order mark" in w], warnings)
+
+    def test_a_dotfile_the_skill_names_is_missing_from_the_package(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            skill = make_skill(tmp, body="Copy references/.env.example, then run scripts/.helper.py.",
+                               files={"references/.env.example": "KEY=\n", "scripts/.helper.py": "print(1)\n"})
+            errors, _ = validate_skill.check(skill)
+            named = sorted(e for e in errors if "leaves out" in e)
+            self.assertEqual(len(named), 2, errors)
+            self.assertIn("references/.env.example", named[0])
+            self.assertIn("scripts/.helper.py", named[1])
+
+    def test_a_script_holding_a_nul_byte_is_an_error_line_on_every_python(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            skill = make_skill(tmp, body="Run scripts/nul.py.", files={"scripts/nul.py": b"x = 1\x00\n"})
+            errors, _ = validate_skill.check(skill)
+            self.assertTrue([e for e in errors if e.startswith("scripts/nul.py does not compile")], errors)
+
+    def test_a_junk_file_is_named_once(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            skill = make_skill(tmp, body="Run scripts/run.py.", files={"scripts/run.py": "print(1)\n",
+                                                                     "scripts/desktop.ini": "[.ShellClassInfo]\n"})
+            _, warnings = validate_skill.check(skill)
+            self.assertEqual([w for w in warnings if "desktop.ini" in w], ["junk in the skill folder: scripts/desktop.ini"])
+
+
 if __name__ == "__main__":
     unittest.main()

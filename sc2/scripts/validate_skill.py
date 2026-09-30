@@ -19,11 +19,15 @@ named sc2's standards; a copy may open the docstring on the quotes' line); the w
 link into it as the packager does; a dotfile is not read, since it never ships;
 desktop.ini is junk; a script that starts with #! and carries a binary payload is not
 held to UTF-8.
+Updated: 2026-09-30 06:34 ET — v1.5: a dotfile the skill names is an error, since the package leaves it
+out; a bundled script's BOM is a warning, not a compile error (Python runs it); a NUL
+byte in a script is an ERROR line on Python 3.10 too; junk is named once, not also as an
+orphan; beside also means beside the link a skill is reached through.
 
 Errors are what claude.ai or the Skills API would reject, or what leaves the
 skill broken: frontmatter keys and limits, a name that differs from its folder,
 angle brackets in the description, a body over 500 lines, a referenced file that
-does not exist (bare or ./-prefixed; test files - *_selftest.py, test_*.py,
+does not exist or is a dotfile the package leaves out (bare or ./-prefixed; test files - *_selftest.py, test_*.py,
 *_test.py, anything under tests/ - name throwaway fixtures and are exempt),
 a bundled Python script that does not compile, a file that is not UTF-8 (a script
 that starts with #! and holds a NUL byte carries a binary payload, is stored
@@ -162,17 +166,20 @@ def _inside(path, folder):
     return p == f or p.startswith(f.rstrip(os.sep) + os.sep)
 
 
-def archive_cut(real, root, out, name, is_dir):
+def archive_cut(real, root, out, name, is_dir, skill=None):
     """Must a walk of the skill at root not take this link, because it reaches the archives
     package_dual.py writes to out? The output folder and any folder above it are cut; when out
     is a folder of its own, anything in it; when the archives go beside the skill, only the
     archives themselves ({name}.skill, {name}-v*.zip): a LICENSE linked from the repository
-    root stays. Shared by the packager and this validator, so both read the same skill."""
+    root stays. Beside means out holds the skill's real folder, or the folder that holds
+    skill, the path as given (a link to the skill keeps its archives beside the link).
+    Shared by the packager and this validator, so both read the same skill."""
     if out is None or _inside(real, root):
         return False
     if _inside(out, real):
         return True
-    if not _inside(root, out):
+    beside = _inside(root, out) or (skill is not None and _inside(os.path.dirname(os.path.abspath(skill)), out))
+    if not beside:
         return _inside(real, out)
     if is_dir or os.path.normcase(os.path.dirname(real)) != os.path.normcase(os.path.realpath(out)):
         return False
@@ -193,7 +200,7 @@ def _tree(skill, out=None):
         for child in sorted(folder.iterdir()):
             real = os.path.realpath(child)
             is_dir = child.is_dir()
-            if archive_cut(real, root, out, skill.name, is_dir):
+            if archive_cut(real, root, out, skill.name, is_dir, skill):
                 continue
             found.append(child)
             if is_dir:
@@ -293,12 +300,19 @@ def check(skill_dir, out=None):
         if src != md and _is_test_file(src.relative_to(skill)):
             continue
         for ref in sorted(set(REF_PATTERN.findall(t))):
-            if not (skill / ref).exists() and not (src.parent / ref).exists():
+            if any(part.startswith(".") and part not in (".", "..") for part in ref.split("/")):
+                # present here, but the package leaves every dotfile out, so the installed skill lacks it
+                errors.append(f"{src.relative_to(skill).as_posix()} references {ref}, which the package leaves "
+                              f"out (a dotfile); rename it without the leading dot")
+            elif not (skill / ref).exists() and not (src.parent / ref).exists():
                 errors.append(f"{src.relative_to(skill).as_posix()} references {ref}, which does not exist")
 
-    # Dotfiles (.keep, .gitignore) never reach the archive, so they cannot be orphans in it.
+    # Dotfiles (.keep, .gitignore) and junk never reach the archive, so they cannot be orphans in it;
+    # junk is named once, below.
     bundled = [p for d in BUNDLE_DIRS for p in tree if p.relative_to(skill).parts[0] == d
-               and p.is_file() and not any(part.startswith(".") for part in p.relative_to(skill).parts)]
+               and p.is_file() and not any(part.startswith(".") for part in p.relative_to(skill).parts)
+               and p.name not in JUNK_FILES and p.suffix != ".pyc"
+               and not set(p.relative_to(skill).parts[:-1]) & JUNK_DIRS]
     everything = "\n".join(texts.values())
     for p in bundled:
         rel = p.relative_to(skill).as_posix()
@@ -308,9 +322,14 @@ def check(skill_dir, out=None):
             if "contents" not in texts[p][:1500].lower():
                 warnings.append(f"{rel} is over 300 lines with no contents list")
         if p.suffix == ".py" and p in texts:
+            source = texts[p]
+            if source.startswith("﻿"):  # Python skips a BOM when it runs the file
+                warnings.append(f"{rel} starts with a UTF-8 byte-order mark (BOM); Python runs it, but save it "
+                                f"as plain UTF-8")
+                source = source[1:]
             try:
-                compile(texts[p], str(p), "exec")
-            except SyntaxError as e:
+                compile(source, str(p), "exec")
+            except (SyntaxError, ValueError) as e:  # a NUL byte is a ValueError on Python 3.10
                 errors.append(f"{rel} does not compile: {e}")
 
     for p in tree:

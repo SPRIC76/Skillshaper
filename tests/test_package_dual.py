@@ -513,6 +513,68 @@ class FourthReview(unittest.TestCase):
                              ["good-skill/SKILL.md", "good-skill/scripts/run.py"])
 
 
+class FifthReview(unittest.TestCase):
+    """The fifth review (3814807): an archive that cannot be written, an output inside the deploy target,
+    .envrc, and a skill reached through a link whose archives land beside the link."""
+
+    def test_a_read_only_archive_in_the_output_is_refused_with_a_message(self):
+        for stale in ("good-skill.skill", "good-skill-v1.0.zip"):
+            with self.subTest(stale), tempfile.TemporaryDirectory() as tmp:
+                skill = make_skill(Path(tmp) / "src")
+                dist = Path(tmp) / "dist"
+                dist.mkdir()
+                (dist / stale).write_bytes(b"PK old")
+                os.chmod(dist / stale, stat.S_IREAD)
+                out = io.StringIO()
+                try:
+                    with contextlib.redirect_stdout(out):
+                        rc = package_dual.main([str(skill), "--version", "1.0", "--output", str(dist)])
+                finally:
+                    os.chmod(dist / stale, stat.S_IWRITE | stat.S_IREAD)
+                self.assertEqual(rc, 1, out.getvalue())
+                self.assertIn("could not be written", out.getvalue())
+
+    def test_an_output_inside_the_deploy_target_is_refused_before_anything_is_built(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            skill = make_skill(Path(tmp) / "src")
+            home = Path(tmp) / "home"
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                rc = package_dual.main([str(skill), "--version", "1.0", "--output", str(home / "good-skill" / "dist"),
+                                        "--deploy", str(home)])
+            self.assertEqual(rc, 1, out.getvalue())
+            self.assertIn("inside the deploy target", out.getvalue())
+            self.assertFalse(home.exists())
+
+    def test_envrc_marks_a_working_copy(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            archive = package(make_skill(Path(tmp) / "src"), Path(tmp) / "out")
+            home = Path(tmp) / "home"
+            target = make_skill(home, files={".envrc": "export KEY=1\n"})
+            with self.assertRaises(RuntimeError) as cm:
+                package_dual.deploy(archive, "good-skill", home)
+            self.assertIn(".envrc", str(cm.exception))
+            self.assertTrue((target / ".envrc").is_file())
+
+    def test_a_licence_beside_a_skill_reached_through_a_link_ships(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, work = Path(tmp) / "repo", Path(tmp) / "work"
+            real = make_skill(repo)
+            work.mkdir()
+            (work / "LICENSE").write_text("Freeware\n", encoding="utf-8")
+            if not (make_junction(work / "good-skill", real) or make_symlink(work / "good-skill", real)):
+                self.skipTest("no folder link on this platform")
+            try:
+                os.symlink(work / "LICENSE", real / "LICENSE")
+            except (OSError, NotImplementedError):
+                self.skipTest("no file symlink on this account")
+            out = io.StringIO()
+            with chdir(work), contextlib.redirect_stdout(out):
+                rc = package_dual.main(["good-skill", "--version", "1.0"])
+            self.assertEqual(rc, 0, out.getvalue())
+            self.assertEqual(entries(work / "good-skill.skill"), ["good-skill/LICENSE", "good-skill/SKILL.md"])
+
+
 class Source(unittest.TestCase):
     """Medium (second review): where the skill is read from and where the archives go."""
 

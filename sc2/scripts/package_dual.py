@@ -22,6 +22,11 @@ the package leaves out (a .gitignore), refuses a .venv, .hg or .svn working copy
 folder of OS junk as empty and clears a read-only folder in the old copy; an --output that
 is a file is refused before packaging; text is judged on the whole file, and a file that
 starts with #! is always stored executable; desktop.ini and __MACOSX are left out.
+Updated: 2026-09-30 06:34 ET — v1.6: beside also means beside the link a skill is reached through, so
+a LICENSE linked from there ships; an --output inside the deploy target is refused
+before packaging; an archive that cannot be written (left read-only, held open) stops
+the run with a message instead of a traceback; .envrc marks a working copy; a stale
+old copy is named as still in use, since a read-only one is now removed.
 
   {name}.skill       what claude.ai and the Claude desktop app install: upload it
                       in the skill settings, or open the file card an agent presents
@@ -33,23 +38,26 @@ first; any error stops packaging. Left out: evals/ and tests/ at the skill root,
 *-workspace folders, __pycache__, node_modules, .git, .pytest_cache, *.pyc, dotfiles
 (.gitignore, .env, .github/), OS junk (.DS_Store, Thumbs.db, desktop.ini, __MACOSX).
 Links of every kind are followed alike; a link back to a folder already on the way (a
-loop) or out to the archives is cut, and when the archives go beside the skill only
-they are cut, so a LICENSE linked in from beside it ships. A file that is UTF-8 text
+loop) or out to the archives is cut, and when the archives go beside the skill (or
+beside the link it is reached through) only they are cut, so a LICENSE linked in from
+there ships. A file that is UTF-8 text
 throughout, with no NUL byte, and is a TEXT_SUFFIXES type, has no suffix, or starts
 with #! is written with LF line endings whatever the checkout uses; every other file
 stays byte-for-byte; a file that starts with #! is stored executable. The archives are
 written outside the skill folder: beside it when run inside it, and an --output
-inside it, or one that is a file, is refused.
+inside it or inside the deploy target, or one that is a file, is refused; an
+archive that cannot be written stops the run with a message.
 
 --deploy HOME also replaces the contents of HOME/{name}/ with exactly what was
 packaged, only when that folder is absent, empty, or an installed copy of this same
 skill; anything else (another skill, a folder of other files, a file, a symlink or
-junction, the very folder being packaged, a working copy marked by .git, .env, .venv,
-.hg, .svn, a *-workspace folder, or tests/ or evals/ at its root) is refused before
-anything is built, and nothing changes; anything else the package leaves out (a
-.gitignore that packagers before 1.4 shipped) is replaced and named, and OS junk and
-caches pass unmentioned. The replacement lands whole or the old copy is put back. The folder itself stays, so a junction or
-symlink an agent uses to reach it keeps working; a link inside it is removed as a
+junction, the very folder being packaged, a working copy marked by .git, .env, .envrc,
+.venv, .hg, .svn, a *-workspace folder, or tests/ or evals/ at its root) is refused
+before anything is built, and nothing changes; anything else the package leaves out
+(a .gitignore that packagers before 1.4 shipped) is replaced and named, and OS junk
+and caches pass unmentioned. The replacement lands whole or the old copy is put back.
+The folder itself stays, so a junction or symlink an agent uses to reach it keeps
+working; a link inside it is removed as a
 link, never followed.
 
 Usage:
@@ -78,7 +86,7 @@ JUNK = EXCLUDE_FILES | {"__MACOSX", "__pycache__", ".pytest_cache", "node_module
 # The marks of a working copy: a --deploy target holding one is refused, since replacing it
 # would delete them. Anything else the package leaves out (.gitignore, which packagers before
 # 1.4 shipped) is replaced and named.
-MARKS = {".git", ".env", ".venv", ".hg", ".svn"}
+MARKS = {".git", ".env", ".envrc", ".venv", ".hg", ".svn"}
 # Written with LF line endings whatever the checkout uses, when the whole file is UTF-8
 # with no NUL byte and it is one of these types, a script that starts with #!, or a file
 # with no suffix (LICENSE, Makefile). Everything else is stored byte-for-byte: a binary
@@ -156,10 +164,10 @@ def _files(skill_path: Path, out=None):
             if child.is_dir():
                 key = os.path.normcase(real)
                 if key not in chain and not should_exclude(rel / "_") \
-                        and not _V.archive_cut(real, root, out, skill_path.name, True):
+                        and not _V.archive_cut(real, root, out, skill_path.name, True, skill_path):
                     walk(child, chain | {key})
             elif child.is_file() and not should_exclude(rel) \
-                    and not _V.archive_cut(real, root, out, skill_path.name, False):
+                    and not _V.archive_cut(real, root, out, skill_path.name, False, skill_path):
                 found.append(child)
 
     walk(skill_path, frozenset({os.path.normcase(root)}))
@@ -319,8 +327,8 @@ def deploy(archive: Path, skill_name: str, home: Path, source=None) -> Path:
         target.mkdir(parents=True, exist_ok=True)
     except OSError as e:
         raise RuntimeError(f"{target} could not be made ({e}); nothing changed") from e
-    # An old copy an earlier deploy could not remove goes now, or, still in use or
-    # read-only, stays where it is: it is never moved inside the next one.
+    # An old copy an earlier deploy could not remove goes now (a read-only flag is cleared), or, still
+    # in use, stays where it is: it is never moved inside the next one.
     stale = []
     for child in sorted(target.iterdir()):
         if child.name.startswith(".old-") and child.is_dir() and not _is_link(child):
@@ -359,7 +367,7 @@ def deploy(archive: Path, skill_name: str, home: Path, source=None) -> Path:
     except OSError as e:
         _say(f"⚠️ Deployed, but the old copy could not be removed ({e}); delete {aside} when it is free")
     for s in stale:
-        _say(f"⚠️ {s} is an old copy from an earlier deploy that could not be removed (in use or read-only); "
+        _say(f"⚠️ {s} is an old copy from an earlier deploy that could not be removed (still in use); "
              "delete it when it is free")
     if others:
         _say(f"ℹ️ Replaced, not carried over (the package leaves them out): {', '.join(others)}")
@@ -397,6 +405,10 @@ def main(argv=None):
             _say(f"❌ --output {out}: {blocked} is a file, not a folder. Nothing packaged.")
             return 1
     home = Path(args.deploy).expanduser().resolve() if args.deploy else None
+    if home is not None and _inside(out, home / skill_path.name):
+        _say(f"❌ --output {out} is inside the deploy target {home / skill_path.name}, which the deploy "
+             f"replaces; write the archives elsewhere. Nothing packaged.")
+        return 1
     if home is not None:  # asked before anything is built; deploy() asks again at the moment it acts
         why = _refusal(skill_path.name, home, source=skill_path)
         if why:
@@ -416,9 +428,14 @@ def main(argv=None):
     name = skill_path.name
     out.mkdir(parents=True, exist_ok=True)
     skill_file = out / f"{name}.skill"
-    count = create_zip(skill_path, skill_file)
     zip_file = out / f"{name}-v{args.version}.zip"
-    shutil.copyfile(skill_file, zip_file)
+    try:
+        count = create_zip(skill_path, skill_file)
+        shutil.copyfile(skill_file, zip_file)
+    except OSError as e:  # an earlier archive left read-only or held open
+        _say(f"❌ {e.filename or out} could not be written ({e.strerror or e}); unlock or close it and "
+             f"run again. Nothing deployed.")
+        return 1
     _say(f"📦 {skill_file} ({count} files, {skill_file.stat().st_size / 1024:.1f} KB)")
     _say(f"📦 {zip_file}")
 
