@@ -132,18 +132,18 @@ class RepoLayout(unittest.TestCase):
         self.assertEqual(errors, [])
         self.assertEqual(warnings, [])
 
-    def test_skill_and_readme_say_version_1_4_and_folder_sc2(self):
+    def test_skill_and_readme_say_version_1_5_and_folder_sc2(self):
         text = (REPO / "sc2" / "SKILL.md").read_text(encoding="utf-8")
         fm, _ = validate_skill._parse_frontmatter(text)
         self.assertEqual(fm["name"], "sc2")
-        self.assertEqual(str(fm["metadata"]["version"]), "1.4")
+        self.assertEqual(str(fm["metadata"]["version"]), "1.5")
         readme = (REPO / "README.md").read_text(encoding="utf-8")
         for line in readme.splitlines():
             if "package_dual.py" in line and "--version" in line and "<X.Y>" not in line:
-                self.assertIn("--version 1.4", line, line)
+                self.assertIn("--version 1.5", line, line)
         self.assertNotRegex(readme, r"skills/skillshaper/|\./skillshaper\b|`skillshaper/`",
                             "README installs the folder under a name other than sc2")
-        self.assertNotRegex(readme, r"--version 1\.[0-3]\b")
+        self.assertNotRegex(readme, r"--version 1\.[0-4]\b")
 
 
 class DotFolder(unittest.TestCase):
@@ -1292,6 +1292,7 @@ SKILL_MD_WORDS = {
     "skill-authoring", "allowed-tools", "kebab-case", "byte-order", "2.1-rc1", "sc2-v", "read-only", "utf-8",
     "built-in", "double-quoted", "root-level", "byte-for-byte", "anti-patterns", "user-friendly",
     "missing-reference", "skill-folder", "skills-home", "space-separated",
+    "native-calibration", "tests-that-can-fail",  # its neighbors, named by job in "In the chain"
 }
 # The word before "skill" or "skills": a name there ("the verify skill") is another skill's; these are not.
 SKILL_WORDS_BEFORE = {"a", "an", "the", "this", "that", "any", "each", "every", "one", "own", "same", "its", "another",

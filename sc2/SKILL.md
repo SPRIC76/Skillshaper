@@ -14,8 +14,8 @@ description: >
   exists, no stale sandbox paths), then always produces both a .skill and a
   versioned .zip.
 metadata:
-  version: "1.4"
-  updated: "2026-09-30"
+  version: "1.5"
+  updated: "2026-10-07"
 ---
 
 # Skillshaper (sc2) — Packaging & Quality Standards
@@ -134,10 +134,18 @@ Every skill has:
 - **Scripts get tests, and the test fails first.** Keep tests outside the skill folder, so packaged and deployed copies stay identical to the development copy.
 - **Name every older copy.** A skill often lives in several places at once: the development folder, a local skills home, one or more hosted accounts, a public repository, project folders. After packaging, list each place still holding the old version and who can refresh it. An uploaded copy changes only when someone uploads the new `.skill`.
 
+## In the chain
+
+Skillshaper is one step in a longer procedure, and each neighbor is optional: it runs alone, and a step whose neighbor is not installed is done by hand.
+
+- **Comes after:** a native-calibration check, when it rules that a new skill is worth building because the platform does not already do the job.
+- **Hands off to:** a tests-that-can-fail discipline, always: a skill with scripts gets a test that fails first (section 5), and a change to an existing skill runs its own tests again before it ships.
+- **Returns:** to a native-calibration check when validation shows the skill only restates what the platform does natively, or when a deploy retires an older custom piece the skill replaces.
+
 ## With a skill-authoring workflow
 
 Where the workflow packages a single archive, package both formats instead, and run the validator wherever it validates. Every other step — interview, research, writing, test cases, evals, description tuning, blind comparison — is unchanged.
 
 ---
 
-*⁰ Formerly: skill-creator-plus → skill-creator-2 → sc2 v1.0 (2026-02-10) → sc2 v1.1 (2026-09-15: validator, deploy, every surface named instead of one sandbox) → Skill-Shaper, sc2 v1.2 (2026-09-28: the name its maker gave it; the id and folder stay sc2, per section 5) → Skillshaper, sc2 v1.3 (2026-09-30: one word, as its author writes it) → sc2 v1.4 (2026-09-30: its own `sc2/` folder so every skill directory finds it; deploy that refuses anything but its own skill; LF archives without dotfiles; test files exempt from the missing-reference check; written for any agent that reads SKILL.md, with no host assumed; frontmatter held to the Agent Skills specification; the rest of eleven independent reviews, each fix behind a test).*
+*⁰ Formerly: skill-creator-plus → skill-creator-2 → sc2 v1.0 (2026-02-10) → sc2 v1.1 (2026-09-15: validator, deploy, every surface named instead of one sandbox) → Skill-Shaper, sc2 v1.2 (2026-09-28: the name its maker gave it; the id and folder stay sc2, per section 5) → Skillshaper, sc2 v1.3 (2026-09-30: one word, as its author writes it) → sc2 v1.4 (2026-09-30: its own `sc2/` folder so every skill directory finds it; deploy that refuses anything but its own skill; LF archives without dotfiles; test files exempt from the missing-reference check; written for any agent that reads SKILL.md, with no host assumed; frontmatter held to the Agent Skills specification; the rest of eleven independent reviews, each fix behind a test) → sc2 v1.5 (2026-10-07: its place in a longer procedure, each neighbor named by its job and optional).*

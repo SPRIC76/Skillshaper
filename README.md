@@ -35,7 +35,7 @@ Skillshaper adds these to any skill-authoring workflow, or stands on its own:
 
 ## Install (any agent)
 
-Copy the `sc2/` folder, keeping its name, into the folder your agent loads its skills from, or let the packager do it: `python sc2/scripts/package_dual.py sc2 --version 1.4 --output dist --deploy <skills-home>`. The scripts need Python 3.10 or later and only the standard library. Some examples of that folder, one of several:
+Copy the `sc2/` folder, keeping its name, into the folder your agent loads its skills from, or let the packager do it: `python sc2/scripts/package_dual.py sc2 --version 1.5 --output dist --deploy <skills-home>`. The scripts need Python 3.10 or later and only the standard library. Some examples of that folder, one of several:
 
 | Agent | Skills folder (all projects, or one project) |
 |-------|-----------------------------------------------|
@@ -50,7 +50,7 @@ Any other runtime that loads folder-based skill instructions takes the same `sc2
 
 For a host that installs a skill from an archive (claude.ai and the Claude desktop app, for example), from the repository root:
 
-1. Package the skill: `python sc2/scripts/package_dual.py sc2 --version 1.4 --output dist`
+1. Package the skill: `python sc2/scripts/package_dual.py sc2 --version 1.5 --output dist`
 2. Upload `dist/sc2.skill` in the host's skill settings.
 3. Confirm `sc2` (Skillshaper) appears in your skills.
 
@@ -73,7 +73,7 @@ python sc2/scripts/package_dual.py <path/to/skill-folder> --version <X.Y> [--out
 **Example** — the skill packages itself:
 
 ```bash
-python sc2/scripts/package_dual.py sc2 --version 1.4 --output dist
+python sc2/scripts/package_dual.py sc2 --version 1.5 --output dist
 ```
 
 Produces:
@@ -81,7 +81,7 @@ Produces:
 | File | Purpose |
 |------|---------|
 | `dist/sc2.skill` | Upload to a host that installs skills from an archive (see [Install by upload](#install-by-upload)) |
-| `dist/sc2-v1.4.zip` | Versioned archive for keeping and for manual installs |
+| `dist/sc2-v1.5.zip` | Versioned archive for keeping and for manual installs |
 
 Both are zip archives with `sc2/SKILL.md` as the root entry.
 
