@@ -152,5 +152,4 @@ Freeware — see [LICENSE](LICENSE). Copyright (c) 2026 MK1 Enterprise. Free to 
 
 Skillshaper · [Freeware](LICENSE)
 
-[MK1 Made](https://mk1made.us) • *deliberately designed, intelligently refined*
-<p align="right">Artificer Intelligence</p>
+<p align="center"><a href="https://mk1made.us">Mk1 made</a></p>
