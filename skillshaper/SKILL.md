@@ -1,7 +1,7 @@
 ---
-name: sc2
+name: skillshaper
 description: >
-  Skillshaper (id sc2, formerly Skill Creator 2): the packaging and quality
+  Skillshaper (formerly sc2, Skill Creator 2): the packaging and quality
   standard for Agent Skills, for any agent that reads a SKILL.md and alongside
   any skill-authoring workflow. Use when asked for Skillshaper or sc2, and
   whenever a skill is created, edited, recalibrated, validated, packaged,
@@ -14,11 +14,11 @@ description: >
   exists, no stale sandbox paths), then always produces both a .skill and a
   versioned .zip.
 metadata:
-  version: "1.5"
-  updated: "2026-10-07"
+  version: "1.6"
+  updated: "2026-10-21"
 ---
 
-# Skillshaper (sc2) — Packaging & Quality Standards
+# Skillshaper — Packaging & Quality Standards
 
 This skill is plain files: this SKILL.md and two Python scripts that need Python 3.10 or later and only the standard library. Any agent that reads the Agent Skills format (a folder with a SKILL.md) and can run a script can use it, in any workflow and on any host. It works on its own, or on top of any skill-authoring workflow (capture intent, draft, test prompts, evals, description tuning): use that workflow for the writing and apply these standards on top.
 
@@ -148,4 +148,4 @@ Where the workflow packages a single archive, package both formats instead, and 
 
 ---
 
-*⁰ Formerly: skill-creator-plus → skill-creator-2 → sc2 v1.0 (2026-02-10) → sc2 v1.1 (2026-09-15: validator, deploy, every surface named instead of one sandbox) → Skill-Shaper, sc2 v1.2 (2026-09-28: the name its maker gave it; the id and folder stay sc2, per section 5) → Skillshaper, sc2 v1.3 (2026-09-30: one word, as its author writes it) → sc2 v1.4 (2026-09-30: its own `sc2/` folder so every skill directory finds it; deploy that refuses anything but its own skill; LF archives without dotfiles; test files exempt from the missing-reference check; written for any agent that reads SKILL.md, with no host assumed; frontmatter held to the Agent Skills specification; the rest of eleven independent reviews, each fix behind a test) → sc2 v1.5 (2026-10-07: its place in a longer procedure, each neighbor named by its job and optional).*
+*⁰ Formerly: skill-creator-plus → skill-creator-2 → sc2 v1.0 (2026-02-10) → sc2 v1.1 (2026-09-15: validator, deploy, every surface named instead of one sandbox) → Skill-Shaper, sc2 v1.2 (2026-09-28: the name its maker gave it; the id and folder stay sc2, per section 5) → Skillshaper, sc2 v1.3 (2026-09-30: one word, as its author writes it) → sc2 v1.4 (2026-09-30: its own `sc2/` folder so every skill directory finds it; deploy that refuses anything but its own skill; LF archives without dotfiles; test files exempt from the missing-reference check; written for any agent that reads SKILL.md, with no host assumed; frontmatter held to the Agent Skills specification; the rest of eleven independent reviews, each fix behind a test) → sc2 v1.5 (2026-10-07: its place in a longer procedure, each neighbor named by its job and optional) → skillshaper v1.6 (2026-10-21: the id and folder take the name, at its maker's word; a call for sc2 still finds it).*

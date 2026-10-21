@@ -1,5 +1,5 @@
 """
-Tests for sc2/scripts/validate_skill.py — Skillshaper (sc2) v1.4 | standard library only
+Tests for skillshaper/scripts/validate_skill.py — Skillshaper (skillshaper) v1.4 | standard library only
 tests/test_validate_skill.py | Created: 2026-09-30 03:55 ET
 Updated: 2026-09-30 14:08 ET — SeventhReview: frontmatter PyYAML refuses (with and without PyYAML), an unlistable folder,
 a referenced name holding a space, the BOM rule's edges and every text type at every level; each
@@ -46,13 +46,13 @@ import unittest
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
-SCRIPTS = REPO / "sc2" / "scripts"
+SCRIPTS = REPO / "skillshaper" / "scripts"
 
 
 def _load(name):
     path = SCRIPTS / f"{name}.py"
     if not path.is_file():
-        raise ImportError(f"{path} not found: the skill must live in {REPO / 'sc2'} (sc2/SKILL.md, sc2/scripts/)")
+        raise ImportError(f"{path} not found: the skill must live in {REPO / 'skillshaper'} (skillshaper/SKILL.md, skillshaper/scripts/)")
     spec = importlib.util.spec_from_file_location(name, path)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
@@ -123,27 +123,27 @@ def unreadable(path):
 
 
 class RepoLayout(unittest.TestCase):
-    """High: the skill must sit in sc2/ so */SKILL.md discovery finds it, and validate clean."""
+    """High: the skill must sit in skillshaper/ so */SKILL.md discovery finds it, and validate clean."""
 
     def test_skill_lives_in_sc2_and_validates_clean(self):
-        self.assertTrue((REPO / "sc2" / "SKILL.md").is_file(), "sc2/SKILL.md missing")
+        self.assertTrue((REPO / "skillshaper" / "SKILL.md").is_file(), "skillshaper/SKILL.md missing")
         self.assertFalse((REPO / "SKILL.md").exists(), "SKILL.md still at the repository root")
-        errors, warnings = validate_skill.check(REPO / "sc2")
+        errors, warnings = validate_skill.check(REPO / "skillshaper")
         self.assertEqual(errors, [])
         self.assertEqual(warnings, [])
 
     def test_skill_and_readme_say_version_1_5_and_folder_sc2(self):
-        text = (REPO / "sc2" / "SKILL.md").read_text(encoding="utf-8")
+        text = (REPO / "skillshaper" / "SKILL.md").read_text(encoding="utf-8")
         fm, _ = validate_skill._parse_frontmatter(text)
-        self.assertEqual(fm["name"], "sc2")
-        self.assertEqual(str(fm["metadata"]["version"]), "1.5")
+        self.assertEqual(fm["name"], "skillshaper")
+        self.assertEqual(str(fm["metadata"]["version"]), "1.6")
         readme = (REPO / "README.md").read_text(encoding="utf-8")
         for line in readme.splitlines():
             if "package_dual.py" in line and "--version" in line and "<X.Y>" not in line:
-                self.assertIn("--version 1.5", line, line)
-        self.assertNotRegex(readme, r"skills/skillshaper/|\./skillshaper\b|`skillshaper/`",
-                            "README installs the folder under a name other than sc2")
-        self.assertNotRegex(readme, r"--version 1\.[0-4]\b")
+                self.assertIn("--version 1.6", line, line)
+        self.assertNotRegex(readme, r"skills/sc2/|\./sc2\b|(?<!older )`sc2/`",
+                            "README installs the folder under a name other than skillshaper")
+        self.assertNotRegex(readme, r"--version 1\.[0-5]\b")
 
 
 class DotFolder(unittest.TestCase):
@@ -819,7 +819,7 @@ class EighthReview(unittest.TestCase):
 
     def test_the_docs_say_what_the_code_does_and_git_ignores_what_the_docs_produce(self):
         import fnmatch
-        skill_md = (REPO / "sc2" / "SKILL.md").read_text(encoding="utf-8")
+        skill_md = (REPO / "skillshaper" / "SKILL.md").read_text(encoding="utf-8")
         readme = (REPO / "README.md").read_text(encoding="utf-8")
         self.assertIn("package_dual.py <skill-folder> --version <X.Y> [--output <dir>] [--deploy <skills-home>] [--strict]", skill_md)
         self.assertIn("a changelog at the root included", skill_md)  # the missing-reference check reads every shipped text file
@@ -830,7 +830,7 @@ class EighthReview(unittest.TestCase):
             self.assertIn("reads this subset of YAML and refuses the rest by name", doc, name)
         self.assertIn("icacls", readme)  # the ACL deny several tests set and lift, and how to lift it after a killed run
         patterns = (REPO / ".gitignore").read_text(encoding="utf-8").split()
-        for produced in ("sc2.skill", "sc2-v1.4.zip", "sc2-v2.0-rc1.zip"):
+        for produced in ("skillshaper.skill", "skillshaper-v1.4.zip", "skillshaper-v2.0-rc1.zip"):
             self.assertTrue(any(fnmatch.fnmatch(produced, pat) for pat in patterns), f"{produced} is not ignored")
         self.assertIn("dist/", patterns)
 
@@ -1249,7 +1249,7 @@ class NinthReview(unittest.TestCase):
         self.assertEqual(found, [])
 
     def test_the_docs_list_the_subset_and_the_refusal(self):
-        for doc in (REPO / "sc2" / "SKILL.md", REPO / "README.md"):
+        for doc in (REPO / "skillshaper" / "SKILL.md", REPO / "README.md"):
             text = doc.read_text(encoding="utf-8")
             with self.subTest(doc.name):
                 self.assertIn("reads this subset of YAML and refuses the rest by name", text)
@@ -1283,13 +1283,13 @@ ROOTED_PATH = re.compile(r"(?<![\w%$~/])(?:~[/\\]|%\w+%|\$\{?(?:HOME|USERPROFILE
 PATH_TOKEN = re.compile(r"[^\s`'\"()\[\]]*[/\\][^\s`'\"()\[\]]*")
 SLASH_COMMAND = re.compile(r"(?<![\w/\\.~%$<{}-])/([A-Za-z][\w:-]*)(?![\w/\\-]|\.\w)")
 LINK = re.compile(r"\]\(([^)\s]+)\)|https?://[^\s)`>]+")
-OWN_SKILL = "sc2"
+OWN_SKILL = "skillshaper"
 OWN_URL = "https://github.com/SPRIC76/Skillshaper"
 # Every kebab-case word SKILL.md may use: its own id and former ids, format words and flags. Any other one is
 # taken for another skill's name and fails; a new word is added here only after reading it.
 SKILL_MD_WORDS = {
     "skill-creator-plus", "skill-creator-2", "skill-shaper",  # its own former ids and name, in the footnote
-    "skill-authoring", "allowed-tools", "kebab-case", "byte-order", "2.1-rc1", "sc2-v", "read-only", "utf-8",
+    "skill-authoring", "allowed-tools", "kebab-case", "byte-order", "2.1-rc1", "skillshaper-v", "read-only", "utf-8",
     "built-in", "double-quoted", "root-level", "byte-for-byte", "anti-patterns", "user-friendly",
     "missing-reference", "skill-folder", "skills-home", "space-separated",
     "native-calibration", "tests-that-can-fail",  # its neighbors, named by job in "In the chain"
@@ -1306,8 +1306,8 @@ def _named_hosts_and_skills(text):
     An install example is a section whose heading holds the word Install or Uninstall ("Installed copies" is not
     one), up to the next heading at its level or above. Outside one, it finds a host from HOSTS, a path from a root
     that differs by machine (~/, %VAR%, $HOME, /opt/ and the like) and any path through a skills folder. Anywhere,
-    it finds another skill: a skills-folder path naming a skill other than sc2, a slash command, a link to anything
-    but sc2's own repository, a kebab-case word not in SKILL_MD_WORDS, "<word> skill" and "the skill <Name>".
+    it finds another skill: a skills-folder path naming a skill other than skillshaper, a slash command, a link to anything
+    but skillshaper's own repository, a kebab-case word not in SKILL_MD_WORDS, "<word> skill" and "the skill <Name>".
     Its bound: a made-up one-word name with nothing around it ("Pair it with Lintfox") is any capitalized word to a
     pattern; a reader catches that one."""
     found, install_level = [], None
@@ -1467,14 +1467,14 @@ class TenthReview(unittest.TestCase):
     def test_the_docs_name_the_subset_as_the_code_reads_it(self):
         """F4: the docs' subset read wider than the code: any key, a tab inside quotes or a block, a list item over
         lines; and `~:` was said to be named as YAML types it, which the built-in reader refuses."""
-        for doc in (REPO / "sc2" / "SKILL.md", REPO / "README.md"):
+        for doc in (REPO / "skillshaper" / "SKILL.md", REPO / "README.md"):
             text = doc.read_text(encoding="utf-8")
             with self.subTest(doc.name):
                 for said in ("a key of letters, digits, `_` and `-` (or quoted without escapes), up to 128 characters",
                              "block lists of `- items`, one line each", "no tab anywhere", "`x.y:`", "`~:`",
                              "`{a}`", "a quote continued at column 0", "a block header on the line below its key"):
                     self.assertIn(said, text)
-        skill_md = (REPO / "sc2" / "SKILL.md").read_text(encoding="utf-8")
+        skill_md = (REPO / "skillshaper" / "SKILL.md").read_text(encoding="utf-8")
         self.assertNotIn("`1:`, `~:`), named as YAML types it", skill_md)
         # The code's own docstring says the same subset.
         doc = validate_skill._Reader.__doc__
@@ -1485,7 +1485,7 @@ class TenthReview(unittest.TestCase):
         """Owner, 2026-09-30: a public skill is for any agent that reads SKILL.md; a host is named only in an install
         example, as one of several, and another skill never by name. 1.4 at 71b15bb named claude.ai, the Claude
         desktop app and another skill-authoring skill throughout."""
-        text = (REPO / "sc2" / "SKILL.md").read_text(encoding="utf-8")
+        text = (REPO / "skillshaper" / "SKILL.md").read_text(encoding="utf-8")
         self.assertEqual(_named_hosts_and_skills(text), [])
         install = [line for line in text.split("\n") if HOST_WORDS.search(line)]
         hosts = {m.group().lower() for line in install for m in HOST_WORDS.finditer(line)}
@@ -1527,13 +1527,13 @@ class EleventhReview(unittest.TestCase):
         """N1: the package holds SKILL.md and scripts/ only, yet SKILL.md said its archives land in "its repository
         root, which `.gitignore` covers", that "the README lists more", and that "this repository keeps them in
         `tests/`"; a copy installed from the .skill has none of those. A line naming the repository or one of its own
-        files outside sc2/ must carry the repository's URL; a path into the skill must exist in sc2/."""
-        sc2 = REPO / "sc2"
+        files outside skillshaper/ must carry the repository's URL; a path into the skill must exist in skillshaper/."""
+        skillshaper = REPO / "skillshaper"
         repo_only = sorted({".gitignore", "LICENSE", "README.md", "tests"}
-                           | {p.name for p in REPO.iterdir() if p.name not in ("sc2", ".git")})
+                           | {p.name for p in REPO.iterdir() if p.name not in ("skillshaper", ".git")})
         mentions = re.compile("|".join([r"`" + re.escape(n) + r"/?`" for n in repo_only]
                                        + [r"(?i:\b(?:the|this|its) (?:README|repository)\b)", r"(?i:\brepository root\b)"]))
-        text = (sc2 / "SKILL.md").read_text(encoding="utf-8")
+        text = (skillshaper / "SKILL.md").read_text(encoding="utf-8")
         found = []
         for number, line in enumerate(text.split("\n"), 1):
             rest = line
@@ -1542,7 +1542,7 @@ class EleventhReview(unittest.TestCase):
             if REPO_URL not in line:
                 found += [(number, m.group()) for m in mentions.finditer(rest)]
                 found += [(number, m.group(1)) for m in re.finditer(r"(?<![\w/.])((?:scripts|references|assets)/[\w./-]*\w)",
-                                                                    line) if not (sc2 / m.group(1)).exists()]
+                                                                    line) if not (skillshaper / m.group(1)).exists()]
         self.assertEqual(found, [])
 
     # Reviewer 11's lines, each inserted outside the install examples and each missed at cbeb000.
@@ -1564,7 +1564,7 @@ class EleventhReview(unittest.TestCase):
         """N2: each line above passed the check at cbeb000 while its docstring claimed it found hosts and other skills.
         Its bound: a made-up one-word skill name ("Pair it with Lintfox for the checks.") reads as any capitalized
         word, so no pattern tells it from a word the text needs; a reader, not this check, catches that one."""
-        base = (REPO / "sc2" / "SKILL.md").read_text(encoding="utf-8")
+        base = (REPO / "skillshaper" / "SKILL.md").read_text(encoding="utf-8")
         anchor = "## 1. Validate before anything ships"
         for label, line in self.ESCAPES.items():
             with self.subTest(label):
@@ -1588,9 +1588,9 @@ class EleventhReview(unittest.TestCase):
                 self.assertTrue(HOST_WORDS.search(f"Open it in {host} first."), host)
 
     def test_a_skills_folder_path_names_another_skill_unless_it_is_sc2s_own(self):
-        """N2: a path into a skills folder names the skill after it; only sc2's own is allowed, and only in the
+        """N2: a path into a skills folder names the skill after it; only skillshaper's own is allowed, and only in the
         install examples."""
-        self.assertEqual(_named_hosts_and_skills("## Install\n\n`~/.agents/skills/sc2/` or `.agents/skills/`\n"), [])
+        self.assertEqual(_named_hosts_and_skills("## Install\n\n`~/.agents/skills/skillshaper/` or `.agents/skills/`\n"), [])
         for line in ("`~/.agents/skills/lintfox/`", "`skills/lintfox`", "`.cursor/skills/skill-drafter/SKILL.md`"):
             with self.subTest(line):
                 self.assertNotEqual(_named_hosts_and_skills(f"## Install\n\n{line}\n"), [])
@@ -1676,7 +1676,7 @@ class EleventhReview(unittest.TestCase):
 
     def test_the_docs_say_the_specifications_shapes_are_warnings_strict_counts(self):
         """The lead, 2026-09-30: the docs say these are warnings and that --strict counts them."""
-        skill_md = " ".join((REPO / "sc2" / "SKILL.md").read_text(encoding="utf-8").split())
+        skill_md = " ".join((REPO / "skillshaper" / "SKILL.md").read_text(encoding="utf-8").split())
         warnings = skill_md.split("**Warnings:**", 1)[1].split("**Why the description", 1)[0]
         errors = skill_md.split("**Errors:**", 1)[1].split("**Warnings:**", 1)[0]
         self.assertIn("`allowed-tools` that is not text", warnings)
@@ -1689,7 +1689,7 @@ class EleventhReview(unittest.TestCase):
 
     def test_the_docs_say_the_specification_not_the_upload_rules(self):
         """N3: "the upload rules" stood for the open specification; a host's stricter rule is named as a host's."""
-        texts = {"SKILL.md": (REPO / "sc2" / "SKILL.md").read_text(encoding="utf-8"),
+        texts = {"SKILL.md": (REPO / "skillshaper" / "SKILL.md").read_text(encoding="utf-8"),
                  "README.md": (REPO / "README.md").read_text(encoding="utf-8"),
                  "validate_skill.py": (SCRIPTS / "validate_skill.py").read_text(encoding="utf-8")}
         for name, text in texts.items():
@@ -1700,8 +1700,7 @@ class EleventhReview(unittest.TestCase):
                 self.assertNotIn("an upload takes exactly one", flat)
                 self.assertIn("Agent Skills specification", flat)
         first = validate_skill.__doc__.strip().splitlines()[0]
-        self.assertEqual(first, "Skill validator — the Agent Skills specification's rules plus Skillshaper's (sc2) "
-                                "standards.")
+        self.assertEqual(first, "Skill validator — the Agent Skills specification's rules plus Skillshaper's standards.")
         self.assertTrue(validate_skill._SIGNATURE.match(first))
         with tempfile.TemporaryDirectory() as tmp:
             errors, _ = self._check(tmp, "angle", "name: good-skill\ndescription: Use when <asked>.\n")
@@ -1731,7 +1730,7 @@ class EleventhReview(unittest.TestCase):
     def test_the_docs_give_the_python_floor_and_one_install_section(self):
         """N5: SKILL.md said "two Python 3 scripts" and the README "Python 3.10+" under a separate "Other IDEs and
         agents" section; the README opened with "Enhanced agent skill", a comparison without its object."""
-        skill_md = (REPO / "sc2" / "SKILL.md").read_text(encoding="utf-8")
+        skill_md = (REPO / "skillshaper" / "SKILL.md").read_text(encoding="utf-8")
         readme = (REPO / "README.md").read_text(encoding="utf-8")
         for name, text in (("SKILL.md", skill_md), ("README.md", readme)):
             with self.subTest(name):
@@ -1800,7 +1799,7 @@ class TwelfthReview(unittest.TestCase):
         """Finding 4: the Error and Warning definitions: errors are the specification's length limits and required
         fields; warnings include a form the specification does not give but hosts accept; the 500-line body limit is
         Skillshaper's own."""
-        texts = {"SKILL.md": (REPO / "sc2" / "SKILL.md").read_text(encoding="utf-8"),
+        texts = {"SKILL.md": (REPO / "skillshaper" / "SKILL.md").read_text(encoding="utf-8"),
                  "README.md": (REPO / "README.md").read_text(encoding="utf-8"),
                  "validate_skill.py": validate_skill.__doc__}
         for name, text in texts.items():
