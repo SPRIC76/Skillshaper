@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Skill validator — the Agent Skills specification's rules plus Skillshaper's (sc2) standards.
+Skill validator — the Agent Skills specification's rules plus Skillshaper's standards.
 validate_skill.py v1.0 | 2026-09-15
 Updated: 2026-09-30 04:02 ET — v1.1: '.' validates under its own folder name; ./-prefixed paths are
 checked; a file that is not UTF-8 is an ERROR line and a BOM a warning; test files are

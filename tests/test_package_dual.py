@@ -1,5 +1,5 @@
 """
-Tests for sc2/scripts/package_dual.py — Skillshaper (sc2) v1.4 | standard library only
+Tests for skillshaper/scripts/package_dual.py — Skillshaper (skillshaper) v1.4 | standard library only
 tests/test_package_dual.py | Created: 2026-09-30 03:55 ET
 Updated: 2026-09-30 14:08 ET — SeventhReview: a folder that takes no new file (spun for hours), --version, a folder at an
 archive's name, a full disk, a held SKILL.md in the installed copy, a file dated before 1980, an
@@ -41,13 +41,13 @@ import zipfile
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
-SCRIPTS = REPO / "sc2" / "scripts"
+SCRIPTS = REPO / "skillshaper" / "scripts"
 
 
 def _load(name):
     path = SCRIPTS / f"{name}.py"
     if not path.is_file():
-        raise ImportError(f"{path} not found: the skill must live in {REPO / 'sc2'} (sc2/SKILL.md, sc2/scripts/)")
+        raise ImportError(f"{path} not found: the skill must live in {REPO / 'skillshaper'} (skillshaper/SKILL.md, skillshaper/scripts/)")
     spec = importlib.util.spec_from_file_location(name, path)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
@@ -1143,18 +1143,18 @@ class Source(unittest.TestCase):
 
     def test_skill_reached_through_a_link_keeps_the_links_name(self):
         with tempfile.TemporaryDirectory() as tmp:
-            real = make_skill(Path(tmp) / "dp", "sc2")
-            dev = real.with_name("sc2-dev")
+            real = make_skill(Path(tmp) / "dp", "skillshaper")
+            dev = real.with_name("skillshaper-dev")
             real.rename(dev)
-            link = make_junction(Path(tmp) / "dp" / "sc2", dev)
+            link = make_junction(Path(tmp) / "dp" / "skillshaper", dev)
             if link is None:
                 self.skipTest("no junction on this platform")
             out = io.StringIO()
             with contextlib.redirect_stdout(out):
                 rc = package_dual.main([str(link), "--version", "1.0", "--output", str(Path(tmp) / "out")])
             self.assertEqual(rc, 0, out.getvalue())
-            names = zipfile.ZipFile(Path(tmp) / "out" / "sc2.skill").namelist()
-            self.assertEqual(names, ["sc2/SKILL.md"])
+            names = zipfile.ZipFile(Path(tmp) / "out" / "skillshaper.skill").namelist()
+            self.assertEqual(names, ["skillshaper/SKILL.md"])
 
     def test_output_inside_the_skill_is_refused(self):
         with tempfile.TemporaryDirectory() as tmp:
